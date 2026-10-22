@@ -3,8 +3,10 @@
 ## Status
 v4: filament + process presets from .json, .3mf, .bbsflmt, or a whole folder. Settings preview per copy, single-file download (.bbsflmt / .zip). 41 tests pass (brute force: 134 copies, all nozzle-safe). Ran all 148 files in the user's Bambu user folder: 486 copies, no safety stops.
 User confirmed a v2 filament import into Bambu Studio worked.
+Own git repo (split out of C:\Claude with history), AGPL-3.0. Public repo: no personal info in these notes.
 
 ## Next steps
+- Publish to GitHub from GitHub Desktop (user doing it; repo is committed locally, no remote yet).
 - Import a converted process preset and a .bbsflmt/.zip bundle in Bambu Studio; confirm both load.
 - Possible: support standalone custom presets (`filament/base/*.json`, no `inherits`, full settings + explicit compatible_printers). The user has ~30 of these.
 - Idea offered, not built: family fallback (e.g. "Bambu TPU 95A HF" -> "Generic TPU").
@@ -18,7 +20,10 @@ User confirmed a v2 filament import into Bambu Studio worked.
 - H2D variants repeat per extruder (DD Standard twice); values map by variant name.
 - Name suffix: Bambu's "@BBL XX" only if the base is specific to the target; else "@BBL <printer>".
 
+- License is AGPL-3.0 because profiles.js is derived from Bambu Studio's AGPL presets.
+
 ## Log
+2026-10-22: split into its own repo (C:\Claude ignores it), added AGPL-3.0 license
 2026-10-22: v4 settings preview, single-file bundle output, folder input, skip non-Bambu/printer presets
 2026-10-22: v3 process presets, default stripping, select all, remembered targets
 2026-10-22: v2 rebuild on Bambu profile snapshot, .3mf input, extruder-variant mapping
