@@ -4,12 +4,13 @@ Copies your Bambu Studio **filament and process** presets to other Bambu printer
 
 ## Use
 1. Open `index.html` in a browser (works offline).
-2. Drop in any of:
+2. Load presets: drop files or a folder on the page, or use **Choose files** / **Choose folder**. Accepted:
    - a `.3mf` project (its filament and process presets are pulled out),
-   - preset `.json` files from `%APPDATA%\BambuStudio\user\<id>\filament` or `\process`,
+   - preset `.json` files, or the whole `%APPDATA%\BambuStudio\user` folder (all your saved presets; duplicates and non-preset files are ignored),
    - a `.bbsflmt` bundle (File > Export > Export Preset Bundle).
-3. Pick presets and target printers (select all / none links; your printer choice is remembered), click **Convert**, download.
-4. In Bambu Studio: File > Import > Import Configs, pick the `.json` files (unzip first if you got a `.zip`).
+3. Pick presets and target printers (select all / none links; your printer choice is remembered), click **Convert**.
+4. Optional: open **preview** under any copy to compare your values with the copy's, setting by setting. Highlighted rows are changes the copy doesn't carry (e.g. a Bowden-only setting going to a direct-drive printer).
+5. Download the single file (`.bbsflmt` for filaments only, `.zip` if processes are included). In Bambu Studio: File > Import > Import Configs, pick that file; no unzipping needed. Each preview also has a link to download that one preset as `.json`.
 
 ## After a Bambu Studio update
 Bambu adds printers and renames base presets. Refresh the snapshot the page uses:
@@ -27,8 +28,9 @@ It reads `C:\Program Files\Bambu Studio\resources\profiles\BBL` and rewrites `pr
 ## Limits
 - Re-check flow ratio, pressure advance, max volumetric speed and speeds/accelerations on the new printer; they're copied as-is.
 - If Bambu has no base of the same family for the target (e.g. a printer-specific profile), that copy is skipped.
-- Process `.json` import is tested only from `.3mf` data; no saved user process file was available to check the format.
+- Standalone custom presets (Bambu's `filament/base` folder, no `inherits`) and printer presets are skipped.
 
 ## Files
 - `index.html`: the page. `converter.js`: logic. `profiles.js`: generated snapshot. `update-profiles.ps1`: makes the snapshot.
 - `tests/test.html`: tests using real presets in `tests/fixtures.js`; every line should read PASS. Serve the folder (e.g. `python -m http.server`) and open `/tests/test.html`.
+

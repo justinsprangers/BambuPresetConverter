@@ -1,6 +1,112 @@
 // Real presets used by test.html (copied from Bambu Studio user folder and a .3mf project).
 window.FIXTURES = {
   presets: {
+  "0.20mm TPU Fast @BBL X2D": {
+    "bottom_color_penetration_layers": "4",
+    "bottom_shell_layers": "4",
+    "bridge_speed": [
+        "80",
+        "nil",
+        "nil",
+        "nil"
+    ],
+    "enable_support": "1",
+    "from": "User",
+    "gap_infill_speed": [
+        "80",
+        "nil",
+        "nil",
+        "nil"
+    ],
+    "independent_support_layer_height": "0",
+    "infill_wall_overlap": "20%",
+    "inherits": "0.20mm Standard @BBL X2D",
+    "initial_layer_infill_speed": [
+        "40",
+        "nil",
+        "nil",
+        "nil"
+    ],
+    "initial_layer_line_width": "0.42",
+    "initial_layer_speed": [
+        "40",
+        "nil",
+        "nil",
+        "nil"
+    ],
+    "inner_wall_speed": [
+        "80",
+        "nil",
+        "nil",
+        "nil"
+    ],
+    "internal_solid_infill_speed": [
+        "80",
+        "nil",
+        "nil",
+        "nil"
+    ],
+    "line_width": "0.44",
+    "minimum_sparse_infill_area": "10",
+    "name": "0.20mm TPU Fast @BBL X2D",
+    "only_one_wall_first_layer": "1",
+    "outer_wall_speed": [
+        "80",
+        "nil",
+        "nil",
+        "nil"
+    ],
+    "print_extruder_id": [
+        "1",
+        "1",
+        "2",
+        "2"
+    ],
+    "print_extruder_variant": [
+        "Direct Drive Standard",
+        "Direct Drive High Flow",
+        "Bowden Standard",
+        "Bowden High Flow"
+    ],
+    "print_settings_id": "0.20mm TPU Fast @BBL X2D",
+    "raft_first_layer_density": "100%",
+    "seam_position": "back",
+    "skeleton_infill_density": "20%",
+    "skin_infill_density": "20%",
+    "sparse_infill_density": "20%",
+    "sparse_infill_pattern": "adaptivecubic",
+    "sparse_infill_speed": [
+        "80",
+        "nil",
+        "nil",
+        "nil"
+    ],
+    "support_angle": "45",
+    "support_interface_pattern": "rectilinear_interlaced",
+    "support_interface_spacing": "0",
+    "support_object_xy_distance": "0.7",
+    "support_speed": [
+        "80",
+        "nil",
+        "100",
+        "nil"
+    ],
+    "support_style": "snug",
+    "support_top_z_distance": "0.4",
+    "support_type": "normal(auto)",
+    "top_color_penetration_layers": "4",
+    "top_shell_layers": "4",
+    "top_surface_line_width": "0.44",
+    "top_surface_speed": [
+        "80",
+        "nil",
+        "nil",
+        "nil"
+    ],
+    "version": "2.6.0.2",
+    "wall_generator": "arachne",
+    "wall_loops": "3"
+},
   "TPU Fast @BBL X2D 0.4 nozzle": {
     "additional_cooling_fan_speed": [
         "80"

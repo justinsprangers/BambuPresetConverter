@@ -13,6 +13,8 @@
   // Fields rebuilt for each copy, never copied from the source.
   const META = new Set(['name', 'inherits', 'from', 'version', 'setting_id', 'updated_time', 'compatible_printers', 'type',
     'instantiation', 'base_id', 'user_id', 'filament_id',
+    // Extruder layout of the source printer; the target base supplies its own.
+    'print_extruder_id', 'printer_extruder_id', 'filament_self_index',
     ...Object.values(KINDS).flatMap(k => [k.variantField, k.idField])]);
 
   // ---- system profile index ----
@@ -58,12 +60,11 @@
   function fromUserJson(j, origin) {
     if (!j || typeof j.name !== 'string') return { skip: 'not a preset file' };
     if (j.from === 'system') return { skip: 'stock Bambu preset; nothing to convert' };
-    if (!j.inherits) return { skip: 'does not inherit from a Bambu system preset' };
+    if ('printer_settings_id' in j || j.type === 'machine') return { skip: 'printer preset; only filament and process presets are supported' };
+    if (!j.inherits) return { skip: 'standalone custom preset (not based on a Bambu preset); not supported' };
     const D = db();
-    const kind = j.type === 'process' || j.type === 'filament' ? j.type
-      : D.byName.process.has(j.inherits) ? 'process' : D.byName.filament.has(j.inherits) ? 'filament'
-      : 'print_settings_id' in j ? 'process' : 'filament_settings_id' in j ? 'filament' : null;
-    if (!kind) return { skip: `type "${j.type}" is not supported (filament and process only)` };
+    const kind = D.byName.process.has(j.inherits) ? 'process' : D.byName.filament.has(j.inherits) ? 'filament' : null;
+    if (!kind) return { skip: `based on "${j.inherits}", which is not a Bambu Lab system preset` };
     const values = {};
     for (const k in j) if (!META.has(k)) values[k] = j[k];
     return { preset: { kind, name: j.name, inherits: j.inherits, values, variants: j[KINDS[kind].variantField] || null,
@@ -107,16 +108,21 @@
   }
 
   // files: [{name, data: Uint8Array}] -> [{preset} | {skip, origin}]
+  // name may be a folder-relative path; other file types (e.g. Bambu's .info files) are ignored.
   async function readInputs(files) {
-    const results = [];
+    const results = [], seen = new Set();
     const addJson = (bytes, origin) => {
+      const text = dec.decode(bytes);
+      if (seen.has(text)) return; // same preset found twice (e.g. in two user folders)
+      seen.add(text);
       let j;
-      try { j = JSON.parse(dec.decode(bytes)); } catch { results.push({ skip: 'not valid JSON', origin }); return; }
+      try { j = JSON.parse(text); } catch { results.push({ skip: 'not valid JSON', origin }); return; }
       const r = fromUserJson(j, origin);
       results.push(r.preset ? r : { skip: r.skip, origin });
     };
     for (const f of files) {
       if (/\.json$/i.test(f.name)) { addJson(f.data, f.name); continue; }
+      if (!/\.(3mf|bbsflmt|bbscfg|zip)$/i.test(f.name)) continue;
       const entries = await readZip(f.data);
       const proj = entries.find(e => e.path === 'Metadata/project_settings.config');
       if (proj) {
@@ -194,7 +200,7 @@
       // Use Bambu's own suffix ("@BBL A1M") only when that base is specific to the target printer.
       const ownBase = base.n.includes(' @') && coverage(base.c).size === 1;
       const suffix = ownBase ? base.n.slice(base.n.indexOf(' @')) : ' @BBL ' + shortPrinter(targetPrinter);
-      const json = { ...mapped.values, [K.variantField]: mapped.variants, from: 'User', inherits: base.n, version: src.version || '2.0.0.0' };
+      const json = { ...mapped.values, [K.variantField]: mapped.variants, from: 'User', inherits: base.n, version: normVersion(src.version) };
       setName(json, src.kind, stem(src.name) + suffix);
       // Lock to the source nozzle sizes when Bambu's base also covers others (or other printers).
       const restrict = base.c.length !== nozzles.length || [...baseNoz].some(n => !nozzles.includes(n));
@@ -238,12 +244,69 @@
           while (used.has(s.kind + name)) name += '+';
           used.add(s.kind + name);
           setName(r.json, s.kind, name);
-          files.push({ path: `${s.kind}/${name}.json`, data: enc.encode(JSON.stringify(r.json, null, 4)) });
-          rows.push({ ...row, to: name, status: 'ok', notes: r.notes, nozzles: r.nozzles });
+          const vendor = s.kind === 'filament' ? (db().byName.filament.get(r.json.inherits).f || 'Generic') : null;
+          files.push({ kind: s.kind, name, vendor, stem: stem(s.name), data: enc.encode(JSON.stringify(r.json, null, 4)) });
+          rows.push({ ...row, to: name, status: 'ok', notes: r.notes, nozzles: r.nozzles, changes: describeChanges(s, r.json) });
         }
       }
     }
     return { rows, files };
+  }
+
+  // Bambu versions look like "02.07.01.62"; write them without leading zeros so they parse as semver.
+  const normVersion = v => (v || '2.0.0.0').split('.').map(x => String(parseInt(x, 10) || 0)).join('.');
+
+  // Short labels for extruder variants in the preview.
+  const shortVariant = v => v.replace('Direct Drive', 'DD').replace('TPU High Flow', 'TPU HF')
+    .replace('High Flow', 'HF').replace('Standard', 'Std');
+
+  function formatValue(val, variants) {
+    if (val === undefined) return '(Bambu default)';
+    if (!Array.isArray(val)) return String(val);
+    if (val.length > 1 && variants && val.length === variants.length) {
+      const set = val.map((x, i) => (x === 'nil' ? null : `${shortVariant(variants[i])} ${x}`)).filter(Boolean);
+      return set.length ? set.join(', ') + (set.length < val.length ? ', others default' : '') : '(Bambu default)';
+    }
+    return val.map(x => (x === 'nil' ? 'default' : x)).join(', ');
+  }
+
+  // Setting-by-setting comparison of a source preset and its copy, for the preview.
+  // `dropped` marks settings the source changed that the copy does not carry.
+  function describeChanges(src, json) {
+    const K = KINDS[src.kind], srcBase = baseOf(src);
+    const SV = src.variants || (srcBase || {}).v || null, TV = json[K.variantField];
+    const vk = variantKeys(srcBase);
+    // Show only what the user edited: per-extruder values equal to the source base default read as "default".
+    const edited = (k, val) => {
+      const ki = vk.indexOf(k);
+      if (!Array.isArray(val) || ki < 0 || !srcBase.d || !SV || val.length !== SV.length || SV.length !== srcBase.v.length) return val;
+      return val.map((x, i) => (x === srcBase.d[ki][i] ? 'nil' : x));
+    };
+    const keys = new Set([...Object.keys(src.values), ...Object.keys(json).filter(k => !META.has(k))]);
+    return [...keys].sort().map(k => {
+      const before = formatValue(edited(k, src.values[k]), SV), after = formatValue(json[k], TV);
+      return { key: k, before, after, dropped: after === '(Bambu default)' && before !== '(Bambu default)' };
+    });
+  }
+
+  // One importable file for all copies. Bambu Studio's importer reads every .json inside a .bbsflmt/.zip
+  // (by basename) and ignores bundle_structure.json, which is written to match Bambu's own export anyway.
+  function makeBundle(files) {
+    const entries = [], vendors = new Map();
+    for (const f of files) {
+      const path = f.kind === 'filament' ? `${f.vendor}/${f.name}.json` : `process/${f.name}.json`;
+      entries.push({ path, data: f.data });
+      if (f.kind === 'filament') (vendors.get(f.vendor) || vendors.set(f.vendor, []).get(f.vendor)).push(path);
+    }
+    const stems = [...new Set(files.map(f => f.stem))];
+    const label = stems.length === 1 ? stems[0] : 'converted_presets';
+    if (vendors.size) {
+      const structure = { version: '', bundle_id: `offline_${label}_${Date.now()}`, bundle_type: 'filament config bundle',
+        filament_name: label, filament_vendor: [...vendors].map(([vendor, filament_path]) => ({ vendor, filament_path })) };
+      entries.unshift({ path: 'bundle_structure.json', data: enc.encode(JSON.stringify(structure, null, 4)) });
+    }
+    const onlyFilament = files.every(f => f.kind === 'filament');
+    return { blob: writeZip(entries), fileName: label.replace(/[\\/:*?"<>|]/g, '_') + (onlyFilament ? '.bbsflmt' : '.zip') };
   }
 
   // Printers the snapshot knows, sorted by name.
@@ -323,6 +386,6 @@
     return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
   }
 
-  root.PresetConverter = { KINDS, readInputs, fromUserJson, fromProject, convertPreset, convertAll, printerList, describeSource,
+  root.PresetConverter = { KINDS, readInputs, makeBundle, describeChanges, fromUserJson, fromProject, convertPreset, convertAll, printerList, describeSource,
     parseCompat, readZip, writeZip, db };
 })(typeof window !== 'undefined' ? window : globalThis);

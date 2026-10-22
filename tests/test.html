@@ -68,9 +68,43 @@
   r = ok(PC.convertPreset(slowProc, A1));
   t('slow process->A1 travel speed', r[0] && JSON.stringify(r[0].json.travel_speed) === '["400"]' && r[0].json.support_angle === '22.5', r[0] && r[0].json.travel_speed);
 
+  // ---- process: saved user .json ----
+  const up = src('0.20mm TPU Fast @BBL X2D');
+  t('user process json detected', up.kind === 'process', up.kind);
+  r = ok(PC.convertPreset(up, A1M));
+  j = r[0] && r[0].json;
+  t('user process->A1M', j && j.inherits === '0.20mm Standard @BBL A1M' && JSON.stringify(j.support_speed) === '["80"]' && j.print_settings_id === j.name, j);
+  t('user process->A1M drops X2D extruder ids', j && !('print_extruder_id' in j));
+  t('non-Bambu and printer presets skipped', !!PC.fromUserJson({ name: 'x', inherits: '0.20mm Standard @Creality CR10V2' }).skip &&
+    !!PC.fromUserJson({ name: 'y', inherits: 'fdm', printer_settings_id: 'y' }).skip);
+
   // ---- convertAll naming / paths ----
   const all = PC.convertAll([proc, ...fil], [A1M]);
-  t('convertAll paths by kind', all.files.some(f => f.path.startsWith('process/')) && all.files.some(f => f.path.startsWith('filament/')), all.files.map(f => f.path));
+  t('convertAll kinds', all.files.some(f => f.kind === 'process') && all.files.filter(f => f.kind === 'filament').length === 2, all.files.map(f => f.kind + ':' + f.name));
+  const parsed = all.files.map(f => JSON.parse(new TextDecoder().decode(f.data)));
+  t('version has no leading zeros', parsed.every(p => /^\d+(\.\d+)*$/.test(p.version) && !/(^|\.)0\d/.test(p.version)), parsed.map(p => p.version));
+
+  // preview
+  const ch = all.rows.find(r => r.kind === 'process').changes;
+  const ow = ch.find(c => c.key === 'outer_wall_speed');
+  t('preview: per-extruder source shows only edits', ow && ow.before === 'DD Std 80, others default' && ow.after === '80' && !ow.dropped, ow);
+  t('preview: nothing dropped X2D->A1M', ch.every(c => !c.dropped), ch.filter(c => c.dropped));
+
+  // bundle output
+  const fb = PC.makeBundle(all.files.filter(f => f.kind === 'filament'));
+  const fbEntries = await PC.readZip(await fb.blob.arrayBuffer(), () => true);
+  const structure = JSON.parse(new TextDecoder().decode(fbEntries.find(e => e.path === 'bundle_structure.json').data));
+  t('bundle: .bbsflmt for filaments only', fb.fileName.endsWith('.bbsflmt'), fb.fileName);
+  t('bundle: structure matches Bambu export', structure.bundle_type === 'filament config bundle' && structure.filament_vendor[0].vendor === 'Generic' &&
+    structure.filament_vendor[0].filament_path.every(p => fbEntries.some(e => e.path === p)), structure);
+  const mixed = PC.makeBundle(all.files);
+  t('bundle: mixed kinds -> .zip with all files', mixed.fileName.endsWith('.zip') && (await PC.readZip(await mixed.blob.arrayBuffer(), () => true)).length === all.files.length + 1, mixed.fileName);
+
+  // folder input: Bambu .info files ignored, duplicates collapsed
+  const enc = new TextEncoder(), fj = enc.encode(JSON.stringify(F.presets['TPU Fast']));
+  const fromFolder = await PC.readInputs([{ name: 'user/1/filament/TPU Fast.json', data: fj }, { name: 'user/1/filament/TPU Fast.info', data: enc.encode('x') },
+    { name: 'user/2/filament/TPU Fast.json', data: fj }]);
+  t('folder input: dedupe + ignore .info', fromFolder.length === 1 && fromFolder[0].preset, fromFolder);
 
   // ---- brute force: every source to every printer; no copy may apply to a nozzle the source lacked ----
   const sources = [...Object.keys(F.presets).map(src), ...proj, ...fromProj(F.projectSlow)];

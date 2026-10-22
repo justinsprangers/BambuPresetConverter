@@ -43,6 +43,8 @@ function Read-Folder($folder, $variantField) {
         $chain = Get-Chain $p $byName
         $variants = Resolve-Key $chain $variantField
         $entry = [ordered]@{ n = $p.name; c = @($p.compatible_printers) }
+        $vendor = Resolve-Key $chain 'filament_vendor'
+        if ($vendor) { $entry.f = [string]$vendor[0] }
         if ($variants -and $variants.Count -gt 1) {
             $entry.v = @($variants)
             # Keys holding one value per extruder variant, with the base's values (to tell edits from defaults).
