@@ -25,19 +25,21 @@
 </head>
 <body>
 <h1>Bambu Preset Converter</h1>
-<p class="sub">Copy your Bambu Studio filament presets to other Bambu printers. Runs offline; nothing is uploaded.</p>
+<p class="sub">Copy your Bambu Studio filament and process presets to other Bambu printers. Runs offline; nothing is uploaded.</p>
 
 <div class="card safe"><strong>Nozzle size is never changed.</strong> A 0.4 mm preset becomes a 0.4 mm preset on the new printer, and is locked to that size.
   If the target has no matching nozzle or Bambu base preset, that copy is skipped. Your originals are not touched.</div>
 
 <div class="card" id="drop">Drop a <code>.3mf</code> project, preset <code>.json</code> files, or a <code>.bbsflmt</code> bundle here, or click to choose
   <input type="file" id="file" accept=".3mf,.json,.bbsflmt,.zip" multiple hidden>
-  <div class="mut" style="margin-top:6px">Your saved presets are in <code>%APPDATA%\BambuStudio\user\&lt;id&gt;\filament</code></div></div>
+  <div class="mut" style="margin-top:6px">Your saved presets are in <code>%APPDATA%\BambuStudio\user\&lt;id&gt;\filament</code> (and <code>\process</code>)</div></div>
 
-<div class="card" id="srcCard" hidden><strong>Presets found</strong><div id="sources" style="margin-top:8px"></div></div>
+<div class="card" id="srcCard" hidden><strong>Presets found</strong>
+  <button class="link" data-all="#sources .src">select all</button> <button class="link" data-none="#sources .src">none</button>
+  <div id="sources" style="margin-top:8px"></div></div>
 
 <div class="card"><strong>Copy to these printers</strong>
-  <button class="link" id="none">clear</button>
+  <button class="link" data-all="#targets input">select all</button> <button class="link" data-none="#targets input">none</button>
   <div class="printers" id="targets"></div></div>
 
 <div class="card"><button id="go" disabled>Convert</button> <span id="status" class="note"></span>
@@ -59,7 +61,16 @@ try {
   $('targets').innerHTML = PC.printerList().map(p =>
     `<label><input type="checkbox" value="${esc(p)}"> ${esc(p.replace('Bambu Lab ', ''))}</label>`).join('');
 } catch (err) { $('targets').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
-$('none').onclick = () => document.querySelectorAll('#targets input').forEach(i => (i.checked = false));
+
+// Remember the chosen target printers between visits (per browser only).
+const SAVED = 'bpc.targets';
+try { const saved = JSON.parse(localStorage.getItem(SAVED) || '[]'); document.querySelectorAll('#targets input').forEach(i => (i.checked = saved.includes(i.value))); } catch {}
+const saveTargets = () => { try { localStorage.setItem(SAVED, JSON.stringify([...document.querySelectorAll('#targets input:checked')].map(i => i.value))); } catch {} };
+$('targets').onchange = saveTargets;
+document.querySelectorAll('[data-all],[data-none]').forEach(b => b.onclick = () => {
+  document.querySelectorAll(b.dataset.all || b.dataset.none).forEach(i => (i.checked = !!b.dataset.all));
+  saveTargets();
+});
 
 const drop = $('drop');
 drop.onclick = e => { if (e.target.tagName !== 'INPUT') $('file').click(); };
@@ -76,10 +87,10 @@ async function load(fileList) {
     const res = await PC.readInputs(files);
     sources = res.filter(r => r.preset).map(r => r.preset);
     $('srcCard').hidden = false;
-    $('sources').innerHTML = '<table><tr><th></th><th>Preset</th><th>Works on now</th><th>Based on</th></tr>' + res.map((r, i) => r.preset
-      ? `<tr><td><input type="checkbox" class="src" data-i="${sources.indexOf(r.preset)}" checked></td><td>${esc(r.preset.name)}</td>
+    $('sources').innerHTML = '<table><tr><th></th><th>Type</th><th>Preset</th><th>Works on now</th><th>Based on</th></tr>' + res.map((r, i) => r.preset
+      ? `<tr><td><input type="checkbox" class="src" data-i="${sources.indexOf(r.preset)}" checked></td><td class="mut">${r.preset.kind}</td><td>${esc(r.preset.name)}</td>
          <td>${esc(PC.describeSource(r.preset))}</td><td class="mut">${esc(r.preset.inherits)}</td></tr>`
-      : `<tr><td></td><td class="skipped" colspan="3">${esc(r.origin)}: ${esc(r.skip)}</td></tr>`).join('') + '</table>';
+      : `<tr><td></td><td class="skipped" colspan="4">${esc(r.origin)}: ${esc(r.skip)}</td></tr>`).join('') + '</table>';
     $('status').textContent = `${sources.length} preset(s) ready.`;
     $('go').disabled = !sources.length;
   } catch (err) { $('status').textContent = ''; $('out').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
@@ -99,13 +110,14 @@ $('go').onclick = () => {
   catch (err) { $('out').innerHTML = `<span class="err">${esc(err.message)}</span>`; return; }
   $('status').textContent = `${res.files.length} preset copy(ies) created.`;
   $('out').innerHTML = `<table><tr><th></th><th>From</th><th>To</th><th>Notes</th></tr>${res.rows.map((r, i) =>
-    `<tr><td class="${r.status}">${r.status}</td><td>${esc(r.from)}</td><td>${esc(r.to)}${r.nozzles ? ` <span class="mut">(${r.nozzles.join('/')} mm)</span>` : ''}</td>
+    `<tr><td class="${r.status}">${r.status}</td><td><span class="mut">${r.kind}</span> ${esc(r.from)}</td><td>${esc(r.to)}${r.nozzles ? ` <span class="mut">(${r.nozzles.join('/')} mm)</span>` : ''}</td>
      <td class="note">${(r.notes || []).map(esc).join('<br>')}</td></tr>`).join('')}</table><p id="dl"></p>`;
   if (!res.files.length) return;
   const one = document.createElement('button');
   if (res.files.length === 1) {
-    one.textContent = 'Download ' + res.files[0].path;
-    one.onclick = () => download(new Blob([res.files[0].data], { type: 'application/json' }), res.files[0].path);
+    const fname = res.files[0].path.split('/').pop();
+    one.textContent = 'Download ' + fname;
+    one.onclick = () => download(new Blob([res.files[0].data], { type: 'application/json' }), fname);
   } else {
     one.textContent = `Download all ${res.files.length} (.zip)`;
     one.onclick = () => download(PC.writeZip(res.files), 'converted_presets.zip');

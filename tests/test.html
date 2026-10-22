@@ -9,10 +9,11 @@
   const PC = window.PresetConverter, F = window.FIXTURES, log = [];
   const t = (n, c, extra) => log.push((c ? 'PASS ' : 'FAIL ') + n + (c || extra === undefined ? '' : '  -> ' + JSON.stringify(extra)));
   const src = n => PC.fromUserJson(F.presets[n], n).preset;
-  const X2D = 'Bambu Lab X2D', A1 = 'Bambu Lab A1', H2D = 'Bambu Lab H2D', P1S = 'Bambu Lab P1S';
+  const X2D = 'Bambu Lab X2D', A1 = 'Bambu Lab A1', A1M = 'Bambu Lab A1 mini', H2D = 'Bambu Lab H2D', P1S = 'Bambu Lab P1S';
   const ok = rs => rs.filter(r => !r.skip);
+  const fromProj = cfg => PC.fromProject(cfg, 'x.3mf').filter(x => x.preset).map(x => x.preset);
 
-  // X2D 0.4 user preset -> A1 (single extruder)
+  // ---- filament: user .json ----
   let r = ok(PC.convertPreset(src('TPU Fast @BBL X2D 0.4 nozzle'), A1));
   let j = r[0] && r[0].json;
   t('X2D->A1 one copy', r.length === 1, r);
@@ -20,20 +21,16 @@
   t('X2D->A1 locked to 0.4', JSON.stringify(j.compatible_printers) === '["Bambu Lab A1 0.4 nozzle"]', j.compatible_printers);
   t('X2D->A1 Direct Drive values', j.nozzle_temperature[0] === '237' && j.filament_max_volumetric_speed[0] === '5' && j.nozzle_temperature.length === 1, j.nozzle_temperature);
   t('X2D->A1 plain values copied', j.fan_max_speed[0] === '90');
-  t('X2D->A1 name', j.name === 'TPU Fast @BBL A1', j.name);
+  t('X2D->A1 name', j.name === 'TPU Fast @BBL A1' && j.filament_settings_id[0] === j.name, j.name);
 
-  // X2D -> P1S uses "Generic TPU" (no @ suffix in Bambu's name)
   r = ok(PC.convertPreset(src('TPU Fast @BBL X2D 0.4 nozzle'), P1S));
   t('X2D->P1S base Generic TPU', r[0] && r[0].json.inherits === 'Generic TPU', r);
   t('X2D->P1S locked to P1S 0.4', r[0] && JSON.stringify(r[0].json.compatible_printers) === '["Bambu Lab P1S 0.4 nozzle"]');
 
-  // X2D -> H2D (different multi-extruder layout)
   r = ok(PC.convertPreset(src('TPU Fast @BBL X2D 0.4 nozzle'), H2D));
   j = r[0] && r[0].json;
-  t('X2D->H2D one copy', r.length === 1, r);
   t('X2D->H2D variant arrays match H2D', j && j.nozzle_temperature.length === j.filament_extruder_variant.length && j.nozzle_temperature[0] === '237', j);
 
-  // A1 preset covers 0.4/0.6/0.8 -> X2D splits across two Bambu bases
   r = ok(PC.convertPreset(src('Strong and Slow TPU @BBL A1'), X2D));
   t('A1->X2D two copies', r.length === 2, r.map(x => x.json.inherits));
   const b04 = r.find(x => x.nozzles.join() === '0.4'), b68 = r.find(x => x.nozzles.join() === '0.6,0.8');
@@ -41,35 +38,61 @@
   t('A1->X2D 0.6/0.8 base', b68 && b68.json.inherits === 'Generic TPU @BBL X2D');
   t('A1->X2D DD Standard only', b04 && JSON.stringify(b04.json.nozzle_temperature) === '["220","nil","nil","nil"]', b04 && b04.json.nozzle_temperature);
 
-  // .3mf project
-  const proj = PC.fromProject(F.project, 'TPU Settings.3mf').filter(x => x.preset).map(x => x.preset);
-  t('3mf: two presets', proj.length === 2, proj.map(p => p.name));
-  t('3mf: per-filament variant values', proj[0].values.filament_max_volumetric_speed.length === 4 && proj[0].values.filament_max_volumetric_speed[0] === '5', proj[0].values.filament_max_volumetric_speed);
-  t('3mf: second filament values', proj[1].values.filament_max_volumetric_speed[0] === '2.7', proj[1].values.filament_max_volumetric_speed);
-  r = ok(PC.convertPreset(proj[1], A1));
-  t('3mf->A1', r[0] && r[0].json.filament_max_volumetric_speed[0] === '2.7' && r[0].json.inherits === 'Generic TPU @BBL A1', r);
+  // ---- .3mf: filaments ----
+  const proj = fromProj(F.project), fil = proj.filter(p => p.kind === 'filament');
+  t('3mf: two filaments + one process', fil.length === 2 && proj.filter(p => p.kind === 'process').length === 1, proj.map(p => p.kind + ':' + p.name));
+  t('3mf: per-filament variant values', fil[0].values.filament_max_volumetric_speed.join() === '5,3.2,3.2,3.2', fil[0].values.filament_max_volumetric_speed);
+  t('3mf: second filament values', fil[1].values.filament_max_volumetric_speed[0] === '2.7');
+  r = ok(PC.convertPreset(fil[1], A1));
+  t('3mf filament->A1', r[0] && r[0].json.filament_max_volumetric_speed[0] === '2.7' && r[0].json.inherits === 'Generic TPU @BBL A1', r);
+  r = ok(PC.convertPreset(fil[0], H2D));
+  t('3mf filament->H2D: unedited X2D defaults become nil', r[0] && JSON.stringify(r[0].json.filament_max_volumetric_speed) === JSON.stringify(['5', ...Array(r[0].json.filament_extruder_variant.length - 1).fill('nil')]), r[0] && r[0].json.filament_max_volumetric_speed);
 
-  // Brute force: every source to every printer; no copy may apply to a nozzle the source lacked.
-  const all = [...Object.keys(F.presets).map(src), ...proj];
+  // ---- .3mf: process ----
+  const proc = proj.find(p => p.kind === 'process');
+  t('3mf process read', proc.name === '0.20mm TPU Fast @BBL X2D' && proc.inherits === '0.20mm Standard @BBL X2D', proc);
+  r = ok(PC.convertPreset(proc, A1M));
+  j = r[0] && r[0].json;
+  t('process X2D->A1M base', j && j.inherits === '0.20mm Standard @BBL A1M', j && j.inherits);
+  t('process X2D->A1M name + id', j && j.name === '0.20mm TPU Fast @BBL A1M' && j.print_settings_id === j.name, j && j.name);
+  t('process X2D->A1M DD speed', j && JSON.stringify(j.outer_wall_speed) === '["80"]', j && j.outer_wall_speed);
+  t('process X2D->A1M scalars kept', j && j.line_width === '0.44' && j.wall_loops === '3' && j.sparse_infill_pattern === 'adaptivecubic');
+  t('process X2D->A1M no lock needed', j && !j.compatible_printers, j && j.compatible_printers);
+  r = ok(PC.convertPreset(proc, P1S));
+  t('process X2D->P1S base + lock + name', r[0] && r[0].json.inherits === '0.20mm Standard @BBL X1C' && r[0].json.name === '0.20mm TPU Fast @BBL P1S' &&JSON.stringify(r[0].json.compatible_printers) === '["Bambu Lab P1S 0.4 nozzle"]', r[0] && r[0].json);
+  r = ok(PC.convertPreset(proc, H2D));
+  j = r[0] && r[0].json;
+  // H2D has Direct Drive Standard on both extruders; both get the edited value.
+  t('process X2D->H2D only DD Standard set', j && j.print_extruder_variant.every((v, i) => j.outer_wall_speed[i] === (v === 'Direct Drive Standard' ? '80' : 'nil')), j && j.outer_wall_speed);
+  const slowProc = fromProj(F.projectSlow).find(p => p.kind === 'process');
+  r = ok(PC.convertPreset(slowProc, A1));
+  t('slow process->A1 travel speed', r[0] && JSON.stringify(r[0].json.travel_speed) === '["400"]' && r[0].json.support_angle === '22.5', r[0] && r[0].json.travel_speed);
+
+  // ---- convertAll naming / paths ----
+  const all = PC.convertAll([proc, ...fil], [A1M]);
+  t('convertAll paths by kind', all.files.some(f => f.path.startsWith('process/')) && all.files.some(f => f.path.startsWith('filament/')), all.files.map(f => f.path));
+
+  // ---- brute force: every source to every printer; no copy may apply to a nozzle the source lacked ----
+  const sources = [...Object.keys(F.presets).map(src), ...proj, ...fromProj(F.projectSlow)];
   let bad = [], count = 0;
   const db = PC.db();
-  for (const s of all) {
-    const base = db.byName.get(s.inherits);
+  for (const s of sources) {
+    const base = db.byName[s.kind].get(s.inherits);
     const srcNoz = new Set(base.c.map(c => PC.parseCompat(c).nozzle));
     for (const p of PC.printerList()) {
       let rs;
       try { rs = PC.convertPreset(s, p); } catch (e) { bad.push(s.name + '->' + p + ': ' + e.message); continue; }
       for (const x of ok(rs)) {
         count++;
-        const eff = x.json.compatible_printers || db.byName.get(x.json.inherits).c.filter(c => PC.parseCompat(c).printer === p);
+        const tb = db.byName[s.kind].get(x.json.inherits);
+        if (!tb) { bad.push('missing base ' + x.json.inherits); continue; }
+        const eff = x.json.compatible_printers || tb.c.filter(c => PC.parseCompat(c).printer === p);
         if (!eff.length || eff.some(c => { const q = PC.parseCompat(c); return q.printer !== p || !srcNoz.has(q.nozzle); })) bad.push(x.json.name);
-        if (!db.byName.get(x.json.inherits)) bad.push('missing base ' + x.json.inherits);
       }
     }
   }
-  t(`brute force: ${count} copies, nozzles all safe`, bad.length === 0, bad);
+  t(`brute force: ${count} copies, nozzles all safe`, bad.length === 0 && count > 100, bad);
 
-  // zip round trip
   const files = [{ path: 'a.json', data: new TextEncoder().encode('{"x":1}') }];
   const back = await PC.readZip(await PC.writeZip(files).arrayBuffer());
   t('zip round trip', back.length === 1 && new TextDecoder().decode(back[0].data) === '{"x":1}');

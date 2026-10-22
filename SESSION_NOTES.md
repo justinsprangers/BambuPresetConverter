@@ -1,18 +1,22 @@
 ﻿# BambuPresetConverter: session notes
 
 ## Status
-v2 works on real data: user preset .json, .3mf projects, .bbsflmt bundles. 20 tests pass (incl. brute force of every fixture to every printer, 69 copies, all nozzle-safe). Not yet imported into Bambu Studio.
+v3: filament + process presets from .json, .3mf, .bbsflmt. 30 tests pass (brute force: 121 copies, all nozzle-safe). User confirmed a v2 filament import into Bambu Studio worked.
 
 ## Next steps
-- Import a converted preset in Bambu Studio; confirm it loads and the `compatible_printers` lock hides it on other nozzle sizes.
+- Import a converted process preset; confirm it loads and lands on the right printer/nozzle.
 - Try a real `.bbsflmt` export (none tested yet).
+- Ideas offered to user (not built): settings diff preview, family fallback (e.g. "Bambu TPU 95A HF" -> "Generic TPU"), .bbsflmt output, drag-in whole user folder.
 
 ## Decisions & gotchas
-- v1 matched on names ("@BBL X1C 0.2 nozzle"); wrong. Bambu base names are inconsistent (P1S TPU = "Generic TPU"; X2D has "@BBL X2D 0.4 nozzle" for 0.4 and "@BBL X2D" for 0.6/0.8). Match by compatible_printers instead.
+- Match bases by compatible_printers + same family, never by name pattern (Bambu names are inconsistent).
 - User presets are diffs over `inherits`; "nil" in a per-variant array = use base value.
-- .3mf: `inherits_group[i+1]` = base, `different_settings_to_system[i+1]` = changed keys, `filament_self_index` maps per-variant array slots to filaments.
-- Copy names: stem + base's "@..." suffix, else "@BBL <printer>".
+- .3mf: `inherits_group[0]`/`different_settings_to_system[0]` = process, `[i+1]` = filament i; `filament_self_index` maps per-variant slots to filaments. .3mf arrays are full, so values equal to the source base default (snapshot `d`) become "nil".
+- Process values are arrays even on single-extruder printers (`["120"]`); scalars like `line_width` stay strings.
+- H2D variants repeat per extruder (DD Standard twice); values map by variant name, so both get the edit.
+- Name suffix: Bambu's "@BBL XX" only if the base is specific to the target; else "@BBL <printer>".
 
 ## Log
+2026-10-22: v3 process presets, default stripping, select all, remembered targets
 2026-10-22: v2 rebuild on Bambu profile snapshot, .3mf input, extruder-variant mapping
 2026-10-22: v1 initial build (name-based; replaced)
