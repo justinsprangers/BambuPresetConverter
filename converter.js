@@ -1,162 +1,220 @@
-// Core logic for BambuPresetConverter. No dependencies; runs in a browser (or Node 18+).
-// Swaps the PRINTER in Bambu Studio filament presets and never touches the NOZZLE SIZE.
+// Core logic for BambuPresetConverter. No dependencies; runs in a browser.
+// Needs window.BAMBU_PROFILES (profiles.js, made by update-profiles.ps1).
+// Re-bases a user filament preset onto the target printer's Bambu system preset of the same family,
+// matched by the printer + nozzle it supports. Nozzle sizes never change.
 (function (root) {
   'use strict';
 
-  // code = the short tag in preset names ("... @BBL X1C"); full = the name used in compatible_printers.
-  // nozzles = sizes Bambu offers for that printer. Verify against Bambu Studio if a new printer comes out.
-  const PRINTERS = [
-    { id: 'X1C', code: 'X1C', full: 'Bambu Lab X1 Carbon', nozzles: [0.2, 0.4, 0.6, 0.8] },
-    { id: 'X1', code: 'X1', full: 'Bambu Lab X1', nozzles: [0.2, 0.4, 0.6, 0.8] },
-    { id: 'X1E', code: 'X1E', full: 'Bambu Lab X1E', nozzles: [0.2, 0.4, 0.6, 0.8] },
-    { id: 'P1P', code: 'P1P', full: 'Bambu Lab P1P', nozzles: [0.2, 0.4, 0.6, 0.8] },
-    { id: 'P1S', code: 'P1S', full: 'Bambu Lab P1S', nozzles: [0.2, 0.4, 0.6, 0.8] },
-    { id: 'A1', code: 'A1', full: 'Bambu Lab A1', nozzles: [0.2, 0.4, 0.6, 0.8] },
-    { id: 'A1M', code: 'A1M', full: 'Bambu Lab A1 mini', nozzles: [0.2, 0.4, 0.6, 0.8] },
-    { id: 'H2D', code: 'H2D', full: 'Bambu Lab H2D', nozzles: [0.2, 0.4, 0.6, 0.8] },
-    { id: 'H2S', code: 'H2S', full: 'Bambu Lab H2S', nozzles: [0.2, 0.4, 0.6, 0.8] },
-  ];
+  const DEFAULT_VARIANT = 'Direct Drive Standard';
+  // Fields rebuilt for each copy, never copied from the source.
+  const META = new Set(['name', 'inherits', 'from', 'filament_settings_id', 'filament_extruder_variant', 'version',
+    'setting_id', 'updated_time', 'compatible_printers', 'type', 'instantiation', 'base_id', 'user_id', 'filament_id']);
 
-  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const NOZ = '(?: (\\d+\\.\\d+) nozzle)?$';
-  const FULL_RES = PRINTERS.map(p => ({ p, re: new RegExp('^' + esc(p.full) + NOZ) }));
-  const SHORT_RE = new RegExp('^(.*@BBL )(' + PRINTERS.map(p => esc(p.code)).join('|') + ')' + NOZ);
-
-  // Parse "Bambu Lab X1 Carbon 0.4 nozzle" or "My PLA @BBL X1C 0.2 nozzle". Null if not a Bambu printer tag.
-  function parseTag(s) {
-    if (typeof s !== 'string') return null;
-    for (const { p, re } of FULL_RES) {
-      const m = s.match(re);
-      if (m) return { form: 'full', printer: p, nozzleText: m[1] || null };
+  // ---- system profile index ----
+  let DB = null;
+  function db() {
+    if (DB) return DB;
+    const P = root.BAMBU_PROFILES;
+    if (!P) throw new Error('profiles.js is missing. Run update-profiles.ps1.');
+    const byName = new Map(P.filaments.map(f => [f.n, f]));
+    const printers = new Map(); // printer -> Set(nozzle)
+    for (const f of P.filaments) for (const c of f.c) {
+      const t = parseCompat(c);
+      if (t) (printers.get(t.printer) || printers.set(t.printer, new Set()).get(t.printer)).add(t.nozzle);
     }
-    const m = s.match(SHORT_RE);
-    if (m) return { form: 'short', prefix: m[1], printer: PRINTERS.find(p => p.code === m[2]), nozzleText: m[3] || null };
-    return null;
+    DB = { P, byName, printers };
+    return DB;
   }
 
-  // Bambu names omit the nozzle for the default 0.4.
-  const nozzleOf = t => parseFloat(t.nozzleText || '0.4');
+  // "Bambu Lab X2D 0.4 nozzle" -> {printer: "Bambu Lab X2D", nozzle: "0.4"}
+  function parseCompat(s) {
+    const m = /^(.*) (\d+\.\d+) nozzle$/.exec(s || '');
+    return m ? { printer: m[1], nozzle: m[2] } : null;
+  }
+  const compat = (printer, nozzle) => `${printer} ${nozzle} nozzle`;
+  const family = name => (name.includes(' @') ? name.slice(0, name.indexOf(' @')) : name);
+  const stem = name => family(name).replace(/ - Copy$/, '');
+  const shortPrinter = p => p.replace(/^Bambu Lab /, '');
+  const variantKeys = base => new Set(base && base.k != null ? db().P.keysets[base.k] : []);
 
-  // Rebuild a parsed tag for another printer, keeping the nozzle text exactly as it was.
-  function retarget(t, target) {
-    const noz = t.nozzleText ? ' ' + t.nozzleText + ' nozzle' : '';
-    return t.form === 'full' ? target.full + noz : t.prefix + target.code + noz;
+  // Nozzles per printer that a preset applies to.
+  function coverage(list) {
+    const m = new Map();
+    for (const c of list || []) { const t = parseCompat(c); if (t) (m.get(t.printer) || m.set(t.printer, new Set()).get(t.printer)).add(t.nozzle); }
+    return m;
   }
 
-  function retargetString(s, target) {
-    const t = parseTag(s);
-    return t ? retarget(t, target) : null;
-  }
-
-  // Sorted list of every nozzle size mentioned in a preset's printer-bearing fields.
-  function nozzleSignature(j) {
-    const strs = [j.name, j.inherits, ...asArray(j.compatible_printers), ...asArray(j.filament_settings_id)];
-    return strs.map(parseTag).filter(Boolean).map(nozzleOf).sort((a, b) => a - b).join(',');
-  }
-
-  const asArray = v => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]);
-
-  // Build the copy of one preset for one target printer. Returns {json} or {skip: reason}.
-  function convertPreset(src, target) {
-    const st = parseTag(src.name);
-    if (!st) return { skip: 'name has no Bambu printer tag' };
-    if (st.printer.id === target.id) return { skip: 'already for ' + target.id };
-    const noz = nozzleOf(st);
-    if (!target.nozzles.includes(noz)) return { skip: `${target.id} has no ${noz} mm nozzle` };
-
-    const out = JSON.parse(JSON.stringify(src));
-    const warnings = [];
-    out.name = retarget(st, target);
-
-    if (typeof src.inherits === 'string' && src.inherits) {
-      const r = retargetString(src.inherits, target);
-      if (r) out.inherits = r;
-      else warnings.push('inherits "' + src.inherits + '" is not a Bambu printer profile; left unchanged');
-    }
-
-    if ('filament_settings_id' in src) {
-      out.filament_settings_id = asArray(src.filament_settings_id).map(x => retargetString(x, target) || x);
-      if (!Array.isArray(src.filament_settings_id)) out.filament_settings_id = out.filament_settings_id[0];
-    }
-
-    if ('compatible_printers' in src) {
-      const kept = [];
-      for (const e of asArray(src.compatible_printers)) {
-        const t = parseTag(e);
-        if (!t) { warnings.push('dropped unrecognised compatible_printers entry "' + e + '"'); continue; }
-        const r = retarget(t, target);
-        if (!target.nozzles.includes(nozzleOf(t))) { warnings.push('dropped "' + e + '" (no such nozzle on ' + target.id + ')'); continue; }
-        if (!kept.includes(r)) kept.push(r);
-      }
-      out.compatible_printers = kept.length ? kept : [retarget({ form: 'full', nozzleText: st.nozzleText }, target)];
-    }
-
-    // Local copies must not claim the original's cloud identity.
-    delete out.setting_id;
-    delete out.updated_time;
-
-    // Safety net: the set of nozzle sizes must be identical before and after.
-    if (nozzleSignature(src) !== nozzleSignature(out) && !warnings.some(w => w.startsWith('dropped'))) {
-      throw new Error('Nozzle mismatch converting "' + src.name + '" to ' + target.id + '; aborted.');
-    }
-    const srcNozzles = new Set(nozzleSignature(src).split(','));
-    for (const n of nozzleSignature(out).split(',')) {
-      if (!srcNozzles.has(n)) throw new Error('Nozzle ' + n + ' appeared converting "' + src.name + '"; aborted.');
-    }
-    return { json: out, warnings };
-  }
-
+  // ---- reading inputs into source presets: {name, inherits, values, variants, origin} ----
   const dec = new TextDecoder(), enc = new TextEncoder();
-  const baseName = p => p.slice(p.lastIndexOf('/') + 1);
-  const dirName = p => (p.includes('/') ? p.slice(0, p.lastIndexOf('/') + 1) : '');
 
-  // entries: [{path, data: Uint8Array}]. targets: array of printer ids.
-  // Returns {entries (originals + new copies), report: [{from, to, status, notes}]}.
-  function convertEntries(entries, targetIds) {
-    const targets = PRINTERS.filter(p => targetIds.includes(p.id));
-    const existing = new Set(entries.map(e => e.path));
-    const added = [];
-    const report = [];
-    const renames = []; // [oldFile, newFile, oldName, newName] for bundle index fix-up
+  function fromUserJson(j, origin) {
+    if (!j || typeof j.name !== 'string') return { skip: 'not a preset file' };
+    if (j.type && j.type !== 'filament') return { skip: `not a filament preset (type: ${j.type})` };
+    if (j.from === 'system') return { skip: 'stock Bambu preset; nothing to convert' };
+    if (!j.inherits) return { skip: 'does not inherit from a Bambu system preset' };
+    const values = {};
+    for (const k in j) if (!META.has(k)) values[k] = j[k];
+    return { preset: { name: j.name, inherits: j.inherits, values, variants: j.filament_extruder_variant || null,
+      compatible: j.compatible_printers || null, version: j.version, origin } };
+  }
 
-    for (const e of entries) {
-      if (!/\.json$/i.test(e.path) || baseName(e.path) === 'bundle_structure.json') continue;
+  // A .3mf project stores the filament presets merged into project_settings.config.
+  // different_settings_to_system[i+1] lists the keys filament i changed; inherits_group[i+1] is its base.
+  function fromProject(cfg, origin) {
+    const ids = cfg.filament_settings_id || [], groups = cfg.inherits_group || [], diffs = cfg.different_settings_to_system || [];
+    const selfIdx = cfg.filament_self_index || null;
+    const out = [];
+    ids.forEach((name, i) => {
+      const base = groups[i + 1], keys = (diffs[i + 1] || '').split(';').filter(Boolean);
+      if (!base) { out.push({ skip: `${name}: stock Bambu preset; nothing to convert`, origin }); return; }
+      const pos = selfIdx ? selfIdx.map((s, p) => (s === String(i + 1) ? p : -1)).filter(p => p >= 0) : null;
+      const variants = pos ? pos.map(p => cfg.filament_extruder_variant[p]) : null;
+      const values = {};
+      for (const k of keys) {
+        const v = cfg[k];
+        if (!Array.isArray(v)) values[k] = v;
+        else if (selfIdx && v.length === selfIdx.length) values[k] = pos.map(p => v[p]);
+        else if (v.length === ids.length) values[k] = [v[i]];
+        else values[k] = v;
+      }
+      out.push({ preset: { name, inherits: base, values, variants, compatible: null, version: cfg.version, origin } });
+    });
+    return out;
+  }
+
+  // files: [{name, data: Uint8Array}] -> [{preset} | {skip, origin}]
+  async function readInputs(files) {
+    const results = [];
+    const addJson = (bytes, origin) => {
       let j;
-      try { j = JSON.parse(dec.decode(e.data)); } catch { report.push({ from: e.path, status: 'skipped', notes: ['not valid JSON'] }); continue; }
-      if (j.type && j.type !== 'filament') { report.push({ from: e.path, status: 'skipped', notes: ['not a filament preset (type: ' + j.type + ')'] }); continue; }
-      if (typeof j.name !== 'string') continue;
-      for (const t of targets) {
-        const r = convertPreset(j, t);
-        if (r.skip) { report.push({ from: j.name, to: t.id, status: 'skipped', notes: [r.skip] }); continue; }
-        const newPath = dirName(e.path) + r.json.name + '.json';
-        if (existing.has(newPath)) { report.push({ from: j.name, to: r.json.name, status: 'skipped', notes: ['already exists in the bundle'] }); continue; }
-        existing.add(newPath);
-        added.push({ path: newPath, data: enc.encode(JSON.stringify(r.json, null, 4)) });
-        renames.push([e.path, newPath, j.name, r.json.name]);
-        report.push({ from: j.name, to: r.json.name, status: 'ok', notes: r.warnings });
+      try { j = JSON.parse(dec.decode(bytes)); } catch { results.push({ skip: 'not valid JSON', origin }); return; }
+      const r = fromUserJson(j, origin);
+      results.push(r.preset ? r : { skip: r.skip, origin });
+    };
+    for (const f of files) {
+      if (/\.json$/i.test(f.name)) { addJson(f.data, f.name); continue; }
+      const entries = await readZip(f.data);
+      const proj = entries.find(e => e.path === 'Metadata/project_settings.config');
+      if (proj) {
+        for (const r of fromProject(JSON.parse(dec.decode(proj.data)), f.name)) results.push(r.preset ? r : { skip: r.skip, origin: f.name });
+        continue;
+      }
+      for (const e of entries) {
+        if (/\.json$/i.test(e.path) && !/bundle_structure\.json$/.test(e.path)) addJson(e.data, f.name + ' > ' + e.path);
       }
     }
+    return results;
+  }
 
-    // Bundle index (bundle_structure.json): wherever it lists a converted file or preset, list the copy too.
-    const out = entries.map(e => {
-      if (baseName(e.path) !== 'bundle_structure.json' || !renames.length) return e;
-      try {
-        const idx = JSON.parse(dec.decode(e.data));
-        const walk = node => {
-          if (Array.isArray(node)) {
-            for (const [of, nf, on, nn] of renames) {
-              for (const [o, n] of [[of, nf], [baseName(of), baseName(nf)], [on, nn]]) {
-                if (node.includes(o) && !node.includes(n)) node.push(n);
-              }
-            }
-            node.forEach(walk);
-          } else if (node && typeof node === 'object') Object.values(node).forEach(walk);
-        };
-        walk(idx);
-        return { path: e.path, data: enc.encode(JSON.stringify(idx, null, 4)) };
-      } catch { return e; }
-    });
-    return { entries: out.concat(added), added, report };
+  // ---- conversion ----
+  // Map every source setting onto the target's extruder variants. Unknown variants become "nil" (= Bambu default).
+  function mapValues(src, srcBase, tgtBase, notes) {
+    const SV = src.variants || (srcBase && srcBase.v) || [DEFAULT_VARIANT];
+    const TV = (tgtBase.v) || [DEFAULT_VARIANT];
+    const srcVK = variantKeys(srcBase), tgtVK = variantKeys(tgtBase);
+    const out = {}, untuned = new Set();
+    for (const [k, val] of Object.entries(src.values)) {
+      const arr = Array.isArray(val) ? val : null;
+      let perVariant = null; // variant name -> value
+      if (arr && SV.length > 1 && arr.length === SV.length && (srcVK.has(k) || arr.length > 1)) {
+        perVariant = new Map(SV.map((v, i) => [v, arr[i]]));
+      } else if (arr && arr.length === 1 && TV.length > 1 && tgtVK.has(k)) {
+        perVariant = new Map([[SV[0], arr[0]]]);
+      }
+      if (!perVariant) { out[k] = val; continue; }
+      const get = v => (perVariant.has(v) && perVariant.get(v) !== 'nil' ? perVariant.get(v) : 'nil');
+      if (TV.length > 1 && tgtVK.has(k)) {
+        const vals = TV.map(get);
+        TV.forEach((v, i) => { if (vals[i] === 'nil') untuned.add(v); });
+        if (vals.some(x => x !== 'nil')) out[k] = vals;
+        else notes.push(`${k} dropped (only set for ${SV.join(', ')})`);
+      } else {
+        const v = get(TV[0]);
+        if (v !== 'nil') out[k] = [v];
+        else notes.push(`${k} dropped (not set for ${TV[0]}; Bambu default used)`);
+      }
+    }
+    if (untuned.size) notes.push(`extruder types not in source (${[...untuned].join(', ')}) use Bambu defaults for per-extruder settings`);
+    return { values: out, variants: TV };
+  }
+
+  // Returns [{json, fileName, notes}] plus {skip} entries, one per target system base used.
+  function convertPreset(src, targetPrinter) {
+    const D = db();
+    const srcBase = D.byName.get(src.inherits);
+    if (!srcBase) return [{ skip: `base "${src.inherits}" is not in the Bambu profile snapshot (rerun update-profiles.ps1?)` }];
+    const cov = coverage(src.compatible || srcBase.c);
+    if (cov.has(targetPrinter)) return [{ skip: `already works on ${shortPrinter(targetPrinter)}` }];
+    const srcNozzles = new Set([...cov.values()].flatMap(s => [...s]));
+    const tgtNozzles = D.printers.get(targetPrinter) || new Set();
+    const fam = family(srcBase.n);
+    const out = [];
+    const byBase = new Map(); // target base -> nozzles it will serve
+    for (const noz of [...srcNozzles].sort()) {
+      if (!tgtNozzles.has(noz)) { out.push({ skip: `${shortPrinter(targetPrinter)} has no ${noz} mm nozzle` }); continue; }
+      const cand = D.P.filaments.find(f => family(f.n) === fam && f.c.includes(compat(targetPrinter, noz)));
+      if (!cand) { out.push({ skip: `Bambu has no "${fam}" preset for ${shortPrinter(targetPrinter)} ${noz} mm` }); continue; }
+      (byBase.get(cand) || byBase.set(cand, []).get(cand)).push(noz);
+    }
+    for (const [base, nozzles] of byBase) {
+      const notes = [];
+      const mapped = mapValues(src, srcBase, base, notes);
+      const baseNoz = coverage(base.c).get(targetPrinter);
+      const suffix = base.n.includes(' @') ? base.n.slice(base.n.indexOf(' @')) : ' @BBL ' + shortPrinter(targetPrinter);
+      const name = stem(src.name) + suffix;
+      const json = { ...mapped.values, filament_extruder_variant: mapped.variants, filament_settings_id: [name],
+        from: 'User', inherits: base.n, name, version: src.version || '2.0.0.0' };
+      // Lock to the source nozzle sizes when Bambu's base also covers others (or other printers).
+      const restrict = base.c.length !== nozzles.length || [...baseNoz].some(n => !nozzles.includes(n));
+      if (restrict) {
+        json.compatible_printers = nozzles.map(n => compat(targetPrinter, n));
+        notes.push(`locked to ${nozzles.join('/')} mm on ${shortPrinter(targetPrinter)} (Bambu's base "${base.n}" covers more)`);
+      }
+      checkNozzles(json, base, srcNozzles, targetPrinter);
+      out.push({ json, fileName: name + '.json', notes, nozzles });
+    }
+    return out;
+  }
+
+  // Hard safety check: the copy may only apply to the target printer at nozzle sizes the source had.
+  function checkNozzles(json, base, srcNozzles, targetPrinter) {
+    const effective = json.compatible_printers || base.c.filter(c => (parseCompat(c) || {}).printer === targetPrinter);
+    for (const c of effective) {
+      const t = parseCompat(c);
+      if (!t || t.printer !== targetPrinter || !srcNozzles.has(t.nozzle)) {
+        throw new Error(`Safety stop: "${json.name}" would apply to "${c}", which the source preset did not cover.`);
+      }
+    }
+  }
+
+  // Convert every source preset to every target printer. Names are made unique.
+  function convertAll(sources, targets) {
+    const rows = [], files = [], used = new Set();
+    for (const s of sources) {
+      for (const t of targets) {
+        for (const r of convertPreset(s, t)) {
+          if (r.skip) { rows.push({ from: s.name, to: shortPrinter(t), status: 'skipped', notes: [r.skip] }); continue; }
+          let name = r.json.name;
+          if (used.has(name)) { name = `${stem(s.name)} @BBL ${shortPrinter(t)}${r.nozzles.length === 1 ? ' ' + r.nozzles[0] + ' nozzle' : ''}`; }
+          while (used.has(name)) name += '+';
+          used.add(name);
+          r.json.name = name; r.json.filament_settings_id = [name];
+          files.push({ path: name + '.json', data: enc.encode(JSON.stringify(r.json, null, 4)) });
+          rows.push({ from: s.name, to: name, status: 'ok', notes: r.notes, nozzles: r.nozzles });
+        }
+      }
+    }
+    return { rows, files };
+  }
+
+  // Printers the snapshot knows, sorted by name.
+  const printerList = () => [...db().printers.keys()].sort();
+
+  // Where a source preset applies today, e.g. "X2D 0.4".
+  function describeSource(src) {
+    const b = db().byName.get(src.inherits);
+    if (!b) return 'unknown base';
+    return [...coverage(src.compatible || b.c)].map(([p, n]) => `${shortPrinter(p)} ${[...n].sort().join('/')}`).join(', ');
   }
 
   // ---- minimal ZIP reader/writer (stored entries on write; deflate or stored on read) ----
@@ -172,17 +230,17 @@
   }
 
   async function inflateRaw(bytes) {
-    const ds = new DecompressionStream('deflate-raw');
-    const stream = new Blob([bytes]).stream().pipeThrough(ds);
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
     return new Uint8Array(await new Response(stream).arrayBuffer());
   }
 
-  async function readZip(buf) {
+  // Only entries we need are inflated (a .3mf also holds a large mesh).
+  async function readZip(buf, wanted = p => /\.(json|config)$/i.test(p)) {
     const b = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
     const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
     let eocd = -1;
     for (let i = b.length - 22; i >= Math.max(0, b.length - 65557); i--) if (v.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
-    if (eocd < 0) throw new Error('Not a zip file');
+    if (eocd < 0) throw new Error('Not a zip-based file');
     const count = v.getUint16(eocd + 10, true);
     let p = v.getUint32(eocd + 16, true);
     const entries = [];
@@ -193,7 +251,7 @@
       const lho = v.getUint32(p + 42, true);
       const path = dec.decode(b.subarray(p + 46, p + 46 + nlen));
       p += 46 + nlen + elen + clen;
-      if (path.endsWith('/')) continue;
+      if (path.endsWith('/') || !wanted(path)) continue;
       const lstart = lho + 30 + v.getUint16(lho + 26, true) + v.getUint16(lho + 28, true);
       const raw = b.subarray(lstart, lstart + csize);
       if (method === 0) entries.push({ path, data: raw.slice() });
@@ -226,5 +284,6 @@
     return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
   }
 
-  root.PresetConverter = { PRINTERS, parseTag, retargetString, convertPreset, convertEntries, readZip, writeZip, nozzleSignature };
+  root.PresetConverter = { readInputs, fromUserJson, fromProject, convertPreset, convertAll, printerList, describeSource,
+    parseCompat, readZip, writeZip, db };
 })(typeof window !== 'undefined' ? window : globalThis);

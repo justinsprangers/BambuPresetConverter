@@ -7,62 +7,82 @@
 <style>
   :root { --bg:#fff; --fg:#1d1d1f; --mut:#6b6b70; --card:#f4f4f6; --acc:#00a152; --bad:#c0392b; --warn:#b36b00; }
   @media (prefers-color-scheme: dark) { :root { --bg:#161618; --fg:#ececf0; --mut:#9a9aa2; --card:#232326; --acc:#2ecc71; --bad:#ff6b5b; --warn:#f0a030; } }
-  body { font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); max-width:760px; margin:0 auto; padding:24px 16px; }
+  body { font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); max-width:820px; margin:0 auto; padding:24px 16px; }
   h1 { font-size:22px; margin:0 0 4px; } p.sub { color:var(--mut); margin:0 0 20px; }
   .card { background:var(--card); border-radius:10px; padding:16px; margin-bottom:16px; }
   #drop { border:2px dashed var(--mut); text-align:center; padding:28px; cursor:pointer; }
   #drop.over { border-color:var(--acc); }
-  .printers { display:flex; flex-wrap:wrap; gap:8px 18px; } label { cursor:pointer; }
+  .printers { display:flex; flex-wrap:wrap; gap:6px 18px; margin-top:8px; } label { cursor:pointer; }
   button { background:var(--acc); color:#fff; border:0; border-radius:6px; padding:8px 14px; font-size:14px; cursor:pointer; }
+  button.link { background:none; color:var(--acc); padding:0; font-size:13px; text-decoration:underline; }
   button:disabled { opacity:.4; cursor:default; }
   table { width:100%; border-collapse:collapse; font-size:13px; } td,th { text-align:left; padding:4px 6px; vertical-align:top; }
+  tr + tr td { border-top:1px solid color-mix(in srgb, var(--mut) 25%, transparent); }
   .ok { color:var(--acc); } .skipped { color:var(--mut); } .err { color:var(--bad); } .note { color:var(--warn); font-size:12px; }
+  .mut { color:var(--mut); font-size:12px; }
   .safe { border-left:4px solid var(--acc); }
 </style>
 </head>
 <body>
 <h1>Bambu Preset Converter</h1>
-<p class="sub">Copy Bambu Studio filament presets to other Bambu printers. Runs offline; nothing is uploaded.</p>
+<p class="sub">Copy your Bambu Studio filament presets to other Bambu printers. Runs offline; nothing is uploaded.</p>
 
-<div class="card safe"><strong>Nozzle size is never changed.</strong> A 0.4 mm preset only becomes a 0.4 mm preset on the new printer; 0.2/0.6/0.8 stay as they are. If the target printer has no such nozzle, that copy is skipped. Your original presets are kept as-is.</div>
+<div class="card safe"><strong>Nozzle size is never changed.</strong> A 0.4 mm preset becomes a 0.4 mm preset on the new printer, and is locked to that size.
+  If the target has no matching nozzle or Bambu base preset, that copy is skipped. Your originals are not touched.</div>
 
-<div class="card" id="drop">Drop a <code>.bbsflmt</code> bundle (or a <code>.zip</code> of preset <code>.json</code> files) here, or click to choose
-  <input type="file" id="file" accept=".bbsflmt,.zip,.json" multiple hidden></div>
+<div class="card" id="drop">Drop a <code>.3mf</code> project, preset <code>.json</code> files, or a <code>.bbsflmt</code> bundle here, or click to choose
+  <input type="file" id="file" accept=".3mf,.json,.bbsflmt,.zip" multiple hidden>
+  <div class="mut" style="margin-top:6px">Your saved presets are in <code>%APPDATA%\BambuStudio\user\&lt;id&gt;\filament</code></div></div>
+
+<div class="card" id="srcCard" hidden><strong>Presets found</strong><div id="sources" style="margin-top:8px"></div></div>
 
 <div class="card"><strong>Copy to these printers</strong>
-  <div class="printers" id="targets" style="margin-top:8px"></div></div>
+  <button class="link" id="none">clear</button>
+  <div class="printers" id="targets"></div></div>
 
 <div class="card"><button id="go" disabled>Convert</button> <span id="status" class="note"></span>
   <div id="out" style="margin-top:12px"></div></div>
 
+<p class="mut" id="ver"></p>
+
+<script src="profiles.js"></script>
 <script src="converter.js"></script>
 <script>
 const PC = window.PresetConverter;
-let entries = [], fileName = 'presets', fromZip = false;
 const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+let sources = [];
 
-$('targets').innerHTML = PC.PRINTERS.map(p =>
-  `<label><input type="checkbox" value="${p.id}" checked> ${p.full.replace('Bambu Lab ', '')}</label>`).join('');
+try {
+  const P = PC.db().P;
+  $('ver').textContent = `Bambu profile snapshot: version ${P.bambuProfileVersion}, taken ${P.generated}. Rerun update-profiles.ps1 after updating Bambu Studio.`;
+  $('targets').innerHTML = PC.printerList().map(p =>
+    `<label><input type="checkbox" value="${esc(p)}"> ${esc(p.replace('Bambu Lab ', ''))}</label>`).join('');
+} catch (err) { $('targets').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+$('none').onclick = () => document.querySelectorAll('#targets input').forEach(i => (i.checked = false));
 
 const drop = $('drop');
-drop.onclick = () => $('file').click();
+drop.onclick = e => { if (e.target.tagName !== 'INPUT') $('file').click(); };
 drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
 drop.ondragleave = () => drop.classList.remove('over');
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); load(e.dataTransfer.files); };
 $('file').onchange = e => load(e.target.files);
 
-async function load(files) {
-  entries = []; $('out').innerHTML = '';
+async function load(fileList) {
+  $('out').innerHTML = ''; $('status').textContent = 'Reading...';
   try {
-    for (const f of files) {
-      const buf = new Uint8Array(await f.arrayBuffer());
-      if (/\.json$/i.test(f.name)) { entries.push({ path: f.name, data: buf }); fromZip = false; }
-      else { fileName = f.name.replace(/\.[^.]+$/, ''); entries.push(...await PC.readZip(buf)); fromZip = true; }
-    }
-    const n = entries.filter(e => /\.json$/i.test(e.path)).length;
-    $('status').textContent = `Loaded ${n} JSON file(s).`;
-    $('go').disabled = !n;
-  } catch (err) { $('status').textContent = ''; $('out').innerHTML = `<span class="err">${err.message}</span>`; }
+    const files = [];
+    for (const f of fileList) files.push({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) });
+    const res = await PC.readInputs(files);
+    sources = res.filter(r => r.preset).map(r => r.preset);
+    $('srcCard').hidden = false;
+    $('sources').innerHTML = '<table><tr><th></th><th>Preset</th><th>Works on now</th><th>Based on</th></tr>' + res.map((r, i) => r.preset
+      ? `<tr><td><input type="checkbox" class="src" data-i="${sources.indexOf(r.preset)}" checked></td><td>${esc(r.preset.name)}</td>
+         <td>${esc(PC.describeSource(r.preset))}</td><td class="mut">${esc(r.preset.inherits)}</td></tr>`
+      : `<tr><td></td><td class="skipped" colspan="3">${esc(r.origin)}: ${esc(r.skip)}</td></tr>`).join('') + '</table>';
+    $('status').textContent = `${sources.length} preset(s) ready.`;
+    $('go').disabled = !sources.length;
+  } catch (err) { $('status').textContent = ''; $('out').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
 }
 
 function download(blob, name) {
@@ -71,22 +91,26 @@ function download(blob, name) {
 }
 
 $('go').onclick = () => {
-  const ids = [...document.querySelectorAll('#targets input:checked')].map(i => i.value);
-  if (!ids.length) { $('status').textContent = 'Pick at least one target printer.'; return; }
+  const targets = [...document.querySelectorAll('#targets input:checked')].map(i => i.value);
+  const chosen = [...document.querySelectorAll('.src:checked')].map(i => sources[+i.dataset.i]);
+  if (!targets.length || !chosen.length) { $('status').textContent = 'Pick at least one preset and one target printer.'; return; }
   let res;
-  try { res = PC.convertEntries(entries, ids); }
-  catch (err) { $('out').innerHTML = `<span class="err">${err.message}</span>`; return; }
-  const ok = res.report.filter(r => r.status === 'ok').length;
-  $('status').textContent = `${ok} preset copy(ies) created.`;
-  const rows = res.report.map(r => `<tr><td class="${r.status}">${r.status}</td><td>${r.from}</td><td>${r.to || ''}</td>
-    <td class="note">${(r.notes || []).join('<br>')}</td></tr>`).join('');
-  $('out').innerHTML = `<table><tr><th></th><th>From</th><th>To</th><th>Notes</th></tr>${rows}</table><p id="dl"></p>`;
-  if (!ok) return;
-  const btn = document.createElement('button');
-  btn.textContent = fromZip ? 'Download bundle (.bbsflmt)' : 'Download as .zip';
-  btn.onclick = () => download(PC.writeZip(res.entries), fromZip ? fileName + '_converted.bbsflmt' : 'converted_presets.zip');
-  $('dl').appendChild(btn);
-  if (!fromZip) $('dl').append(' (unzip, then File > Import > Import Configs in Bambu Studio)');
+  try { res = PC.convertAll(chosen, targets); }
+  catch (err) { $('out').innerHTML = `<span class="err">${esc(err.message)}</span>`; return; }
+  $('status').textContent = `${res.files.length} preset copy(ies) created.`;
+  $('out').innerHTML = `<table><tr><th></th><th>From</th><th>To</th><th>Notes</th></tr>${res.rows.map((r, i) =>
+    `<tr><td class="${r.status}">${r.status}</td><td>${esc(r.from)}</td><td>${esc(r.to)}${r.nozzles ? ` <span class="mut">(${r.nozzles.join('/')} mm)</span>` : ''}</td>
+     <td class="note">${(r.notes || []).map(esc).join('<br>')}</td></tr>`).join('')}</table><p id="dl"></p>`;
+  if (!res.files.length) return;
+  const one = document.createElement('button');
+  if (res.files.length === 1) {
+    one.textContent = 'Download ' + res.files[0].path;
+    one.onclick = () => download(new Blob([res.files[0].data], { type: 'application/json' }), res.files[0].path);
+  } else {
+    one.textContent = `Download all ${res.files.length} (.zip)`;
+    one.onclick = () => download(PC.writeZip(res.files), 'converted_presets.zip');
+  }
+  $('dl').append(one, ' Then in Bambu Studio: File > Import > Import Configs.');
 };
 </script>
 </body>

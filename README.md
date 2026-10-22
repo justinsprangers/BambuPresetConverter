@@ -1,26 +1,34 @@
 ﻿# BambuPresetConverter
 
-Copies Bambu Studio filament presets from one Bambu printer to others (e.g. X1C -> P1S, A1 mini), **without ever changing nozzle size**.
+Copies your Bambu Studio filament presets to other Bambu printers (e.g. X2D -> A1, P1S, H2D). **Nozzle size is never changed.**
 
 ## Use
-1. In Bambu Studio export your filament presets (File > Export > Export Preset Bundle, or Export Configs). 
-2. Open `index.html` in a browser (works offline).
-3. Drop in the `.bbsflmt` bundle (or a `.zip` of preset `.json` files, or loose `.json` files).
-4. Tick the target printers, click **Convert**, review the table, download.
-5. In Bambu Studio: File > Import > Import Configs (or Import Preset Bundle).
+1. Open `index.html` in a browser (works offline).
+2. Drop in any of:
+   - a `.3mf` project (filament presets are pulled out of it),
+   - preset `.json` files from `%APPDATA%\BambuStudio\user\<id>\filament`,
+   - a `.bbsflmt` bundle (File > Export > Export Preset Bundle).
+3. Untick presets you don't want, tick target printers, click **Convert**, download.
+4. In Bambu Studio: File > Import > Import Configs, pick the `.json` (unzip first if you got a `.zip`).
 
-## What it changes
-In each copy: `name`, `inherits`, `filament_settings_id` and `compatible_printers` get the new printer; `setting_id` is dropped. Originals are kept untouched.
+## After a Bambu Studio update
+Bambu adds printers and renames base presets. Refresh the snapshot the page uses:
+```
+powershell -ExecutionPolicy Bypass -File update-profiles.ps1
+```
+It reads `C:\Program Files\Bambu Studio\resources\profiles\BBL` and rewrites `profiles.js` (~45 s). The page footer shows the snapshot version.
 
-## Nozzle safety
-- Only the printer part of each tag changes; the nozzle text ("0.2 nozzle", or none = 0.4) is copied verbatim.
-- If the target has no such nozzle, that copy is skipped.
-- A built-in check aborts the conversion if the set of nozzle sizes in a copy differs from its source.
+## How it works
+- Your preset only stores what you changed from a Bambu base preset (`inherits`).
+- For the target printer, it finds Bambu's base preset of the same family (e.g. "Generic TPU") that supports that printer **at the same nozzle size**, and re-bases your changes onto it.
+- Dual-extruder printers (X2D, H2D...) store some settings once per extruder type. Values are matched by extruder type (e.g. "Direct Drive Standard"); types the source didn't have use Bambu's defaults (noted in the table).
+- Copies apply only to nozzle sizes the source applied to. If Bambu's base covers more sizes, the copy gets an explicit `compatible_printers` lock. A final check aborts if any copy would reach another nozzle size.
 
 ## Limits
-- Printer-specific values (flow ratio, pressure advance, max volumetric speed) are copied as-is. Re-tune on the new printer.
-- Only Bambu printers listed in `converter.js` (`PRINTERS`) are recognised; add new ones there.
-- Not yet tested against a real Bambu Studio export. File layout inside `.bbsflmt` is assumed from forum reports.
+- Re-check flow ratio, pressure advance and max volumetric speed on the new printer; they're copied as-is.
+- From a `.3mf`, per-extruder values the source never changed are copied as the source printer's defaults.
+- Not yet verified: that Bambu Studio honours the `compatible_printers` lock on imported user presets. Check after importing that the copy doesn't show up for other nozzle sizes.
 
-## Tests
-Open `test.html` in a browser served from this folder (needs `converter.js` beside it); all lines should read PASS.
+## Files
+- `index.html`: the page. `converter.js`: logic. `profiles.js`: generated snapshot. `update-profiles.ps1`: makes the snapshot.
+- `tests/test.html`: tests using real presets in `tests/fixtures.js`; every line should read PASS. Open it from a local web server or a normal browser (the relative scripts must load).

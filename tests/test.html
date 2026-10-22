@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8"><title>Converter tests</title>
+<pre id="r">running...</pre>
+<script src="../profiles.js"></script>
+<script src="../converter.js"></script>
+<script src="fixtures.js"></script>
+<script>
+(async () => {
+  const PC = window.PresetConverter, F = window.FIXTURES, log = [];
+  const t = (n, c, extra) => log.push((c ? 'PASS ' : 'FAIL ') + n + (c || extra === undefined ? '' : '  -> ' + JSON.stringify(extra)));
+  const src = n => PC.fromUserJson(F.presets[n], n).preset;
+  const X2D = 'Bambu Lab X2D', A1 = 'Bambu Lab A1', H2D = 'Bambu Lab H2D', P1S = 'Bambu Lab P1S';
+  const ok = rs => rs.filter(r => !r.skip);
+
+  // X2D 0.4 user preset -> A1 (single extruder)
+  let r = ok(PC.convertPreset(src('TPU Fast @BBL X2D 0.4 nozzle'), A1));
+  let j = r[0] && r[0].json;
+  t('X2D->A1 one copy', r.length === 1, r);
+  t('X2D->A1 base', j.inherits === 'Generic TPU @BBL A1', j.inherits);
+  t('X2D->A1 locked to 0.4', JSON.stringify(j.compatible_printers) === '["Bambu Lab A1 0.4 nozzle"]', j.compatible_printers);
+  t('X2D->A1 Direct Drive values', j.nozzle_temperature[0] === '237' && j.filament_max_volumetric_speed[0] === '5' && j.nozzle_temperature.length === 1, j.nozzle_temperature);
+  t('X2D->A1 plain values copied', j.fan_max_speed[0] === '90');
+  t('X2D->A1 name', j.name === 'TPU Fast @BBL A1', j.name);
+
+  // X2D -> P1S uses "Generic TPU" (no @ suffix in Bambu's name)
+  r = ok(PC.convertPreset(src('TPU Fast @BBL X2D 0.4 nozzle'), P1S));
+  t('X2D->P1S base Generic TPU', r[0] && r[0].json.inherits === 'Generic TPU', r);
+  t('X2D->P1S locked to P1S 0.4', r[0] && JSON.stringify(r[0].json.compatible_printers) === '["Bambu Lab P1S 0.4 nozzle"]');
+
+  // X2D -> H2D (different multi-extruder layout)
+  r = ok(PC.convertPreset(src('TPU Fast @BBL X2D 0.4 nozzle'), H2D));
+  j = r[0] && r[0].json;
+  t('X2D->H2D one copy', r.length === 1, r);
+  t('X2D->H2D variant arrays match H2D', j && j.nozzle_temperature.length === j.filament_extruder_variant.length && j.nozzle_temperature[0] === '237', j);
+
+  // A1 preset covers 0.4/0.6/0.8 -> X2D splits across two Bambu bases
+  r = ok(PC.convertPreset(src('Strong and Slow TPU @BBL A1'), X2D));
+  t('A1->X2D two copies', r.length === 2, r.map(x => x.json.inherits));
+  const b04 = r.find(x => x.nozzles.join() === '0.4'), b68 = r.find(x => x.nozzles.join() === '0.6,0.8');
+  t('A1->X2D 0.4 base', b04 && b04.json.inherits === 'Generic TPU @BBL X2D 0.4 nozzle');
+  t('A1->X2D 0.6/0.8 base', b68 && b68.json.inherits === 'Generic TPU @BBL X2D');
+  t('A1->X2D DD Standard only', b04 && JSON.stringify(b04.json.nozzle_temperature) === '["220","nil","nil","nil"]', b04 && b04.json.nozzle_temperature);
+
+  // .3mf project
+  const proj = PC.fromProject(F.project, 'TPU Settings.3mf').filter(x => x.preset).map(x => x.preset);
+  t('3mf: two presets', proj.length === 2, proj.map(p => p.name));
+  t('3mf: per-filament variant values', proj[0].values.filament_max_volumetric_speed.length === 4 && proj[0].values.filament_max_volumetric_speed[0] === '5', proj[0].values.filament_max_volumetric_speed);
+  t('3mf: second filament values', proj[1].values.filament_max_volumetric_speed[0] === '2.7', proj[1].values.filament_max_volumetric_speed);
+  r = ok(PC.convertPreset(proj[1], A1));
+  t('3mf->A1', r[0] && r[0].json.filament_max_volumetric_speed[0] === '2.7' && r[0].json.inherits === 'Generic TPU @BBL A1', r);
+
+  // Brute force: every source to every printer; no copy may apply to a nozzle the source lacked.
+  const all = [...Object.keys(F.presets).map(src), ...proj];
+  let bad = [], count = 0;
+  const db = PC.db();
+  for (const s of all) {
+    const base = db.byName.get(s.inherits);
+    const srcNoz = new Set(base.c.map(c => PC.parseCompat(c).nozzle));
+    for (const p of PC.printerList()) {
+      let rs;
+      try { rs = PC.convertPreset(s, p); } catch (e) { bad.push(s.name + '->' + p + ': ' + e.message); continue; }
+      for (const x of ok(rs)) {
+        count++;
+        const eff = x.json.compatible_printers || db.byName.get(x.json.inherits).c.filter(c => PC.parseCompat(c).printer === p);
+        if (!eff.length || eff.some(c => { const q = PC.parseCompat(c); return q.printer !== p || !srcNoz.has(q.nozzle); })) bad.push(x.json.name);
+        if (!db.byName.get(x.json.inherits)) bad.push('missing base ' + x.json.inherits);
+      }
+    }
+  }
+  t(`brute force: ${count} copies, nozzles all safe`, bad.length === 0, bad);
+
+  // zip round trip
+  const files = [{ path: 'a.json', data: new TextEncoder().encode('{"x":1}') }];
+  const back = await PC.readZip(await PC.writeZip(files).arrayBuffer());
+  t('zip round trip', back.length === 1 && new TextDecoder().decode(back[0].data) === '{"x":1}');
+
+  document.getElementById('r').textContent = log.join('\n');
+})().catch(e => document.getElementById('r').textContent = 'ERROR ' + e.stack);
+</script>
