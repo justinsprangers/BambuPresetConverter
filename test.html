@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8"><title>Converter tests</title>
+<pre id="r">running...</pre>
+<script src="converter.js"></script>
+<script>
+(async () => {
+  const PC = window.PresetConverter, log = [], enc = new TextEncoder(), dec = new TextDecoder();
+  const t = (n, c) => log.push((c ? 'PASS ' : 'FAIL ') + n);
+  const mk = (name, extra) => ({ name, inherits: name.replace(/^.* @/, 'Bambu PLA Basic @'), from: 'User', compatible_printers: [], filament_settings_id: [name], setting_id: 'x', ...extra });
+  const p04 = mk('My PLA @BBL X1C', { inherits: 'Bambu PLA Basic @BBL X1C', compatible_printers: ['Bambu Lab X1 Carbon 0.4 nozzle'] });
+  const p02 = mk('My PLA @BBL X1C 0.2 nozzle', { inherits: 'Bambu PLA Basic @BBL X1C 0.2 nozzle', compatible_printers: ['Bambu Lab X1 Carbon 0.2 nozzle'] });
+  const p06 = mk('My PLA @BBL X1C 0.6 nozzle', { inherits: 'Bambu PLA Basic @BBL X1C 0.6 nozzle', compatible_printers: ['Bambu Lab X1 Carbon 0.6 nozzle'] });
+  const a1 = mk('Mini PLA @BBL A1M', { inherits: 'Bambu PLA Basic @BBL A1M', compatible_printers: ['Bambu Lab A1 mini 0.4 nozzle'] });
+
+  let r = PC.convertPreset(p04, PC.PRINTERS.find(p => p.id === 'P1S')).json;
+  t('0.4 name', r.name === 'My PLA @BBL P1S');
+  t('0.4 inherits', r.inherits === 'Bambu PLA Basic @BBL P1S');
+  t('0.4 compat', r.compatible_printers[0] === 'Bambu Lab P1S 0.4 nozzle');
+  t('setting_id dropped', !('setting_id' in r));
+  r = PC.convertPreset(p02, PC.PRINTERS.find(p => p.id === 'A1M')).json;
+  t('0.2 stays 0.2', r.name === 'My PLA @BBL A1M 0.2 nozzle' && r.compatible_printers[0] === 'Bambu Lab A1 mini 0.2 nozzle' && r.inherits.endsWith('A1M 0.2 nozzle'));
+  r = PC.convertPreset(a1, PC.PRINTERS.find(p => p.id === 'X1C')).json;
+  t('A1 mini -> X1 Carbon full name', r.compatible_printers[0] === 'Bambu Lab X1 Carbon 0.4 nozzle');
+  t('X1 vs X1C parse', PC.parseTag('x @BBL X1').printer.id === 'X1' && PC.parseTag('x @BBL X1C').printer.id === 'X1C');
+  t('same printer skipped', !!PC.convertPreset(p04, PC.PRINTERS.find(p => p.id === 'X1C')).skip);
+  t('non-Bambu name skipped', !!PC.convertPreset({ name: 'Generic PLA' }, PC.PRINTERS[0]).skip);
+
+  // multi-nozzle compat list must keep every nozzle
+  const multi = mk('Multi @BBL X1C', { compatible_printers: ['Bambu Lab X1 Carbon 0.4 nozzle', 'Bambu Lab X1 Carbon 0.6 nozzle'] });
+  r = PC.convertPreset(multi, PC.PRINTERS.find(p => p.id === 'H2D')).json;
+  t('multi nozzle preserved', r.compatible_printers.join('|') === 'Bambu Lab H2D 0.4 nozzle|Bambu Lab H2D 0.6 nozzle');
+
+  // zip round trip + full convert
+  const entries = [p04, p02, p06].map(j => ({ path: 'filament/' + j.name + '.json', data: enc.encode(JSON.stringify(j)) }));
+  entries.push({ path: 'bundle_structure.json', data: enc.encode(JSON.stringify({ filament_name: [p04.name, p02.name, p06.name] })) });
+  const blob = PC.writeZip(entries);
+  const back = await PC.readZip(await blob.arrayBuffer());
+  t('zip round trip', back.length === 4 && dec.decode(back[0].data) === dec.decode(entries[0].data));
+  const res = PC.convertEntries(back, ['P1S', 'A1M']);
+  t('6 copies made', res.added.length === 6);
+  const bundle = JSON.parse(dec.decode(res.entries.find(e => e.path === 'bundle_structure.json').data));
+  t('bundle index extended', bundle.filament_name.length === 9);
+  // global invariant: every added file's nozzle matches its source
+  let allSame = true;
+  for (const a of res.added) {
+    const j = JSON.parse(dec.decode(a.data));
+    const m = j.name.match(/(\d\.\d) nozzle$/);
+    const srcNoz = m ? m[1] : '0.4';
+    if (PC.nozzleSignature(j).split(',').some(n => parseFloat(n) !== parseFloat(srcNoz))) allSame = false;
+  }
+  t('every copy keeps its nozzle', allSame);
+  // also a real deflate zip? (browser-made via CompressionStream)
+  const cs = new Blob([enc.encode('hello')]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+  t('deflate available', (await new Response(cs).arrayBuffer()).byteLength > 0);
+  document.getElementById('r').textContent = log.join('\n');
+})().catch(e => document.getElementById('r').textContent = 'ERROR ' + e.stack);
+</script>
