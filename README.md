@@ -34,3 +34,6 @@ It reads `C:\Program Files\Bambu Studio\resources\profiles\BBL` and rewrites `pr
 - `index.html`: the page. `converter.js`: logic. `profiles.js`: generated snapshot. `update-profiles.ps1`: makes the snapshot.
 - `tests/test.html`: tests using real presets in `tests/fixtures.js`; every line should read PASS. Serve the folder (e.g. `python -m http.server`) and open `/tests/test.html`.
 
+
+## License
+AGPL-3.0 (see `LICENSE`). `profiles.js` is generated from the system presets that ship with [Bambu Studio](https://github.com/bambulab/BambuStudio), which is AGPL-3.0, so this project uses the same license.
