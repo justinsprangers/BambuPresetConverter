@@ -320,7 +320,7 @@
     for (const s of sources) {
       for (const t of targets) {
         for (const r of convertPreset(s, t)) {
-          const row = { kind: s.kind, from: s.name };
+          const row = { kind: s.kind, from: s.name, printer: shortPrinter(t) };
           if (r.skip) { rows.push({ ...row, to: shortPrinter(t), status: 'skipped', notes: [r.skip] }); continue; }
           let name = r.json.name;
           if (used.has(s.kind + name)) name = `${stem(s.name)} @BBL ${shortPrinter(t)}${r.nozzles.length === 1 ? ' ' + r.nozzles[0] + ' nozzle' : ''}`;

@@ -22,8 +22,21 @@
   .mut { color:var(--mut); font-size:12px; }
   .safe { border-left:4px solid var(--acc); }
   details summary { cursor:pointer; } table.diff { margin:6px 0; font-size:12px; } table.diff td { padding:2px 6px; }
-  input.rename { font:inherit; width:100%; box-sizing:border-box; background:var(--bg); color:var(--fg); border:1px solid var(--mut); border-radius:4px; padding:2px 6px; }
+  .result { border:1px solid color-mix(in srgb, var(--mut) 30%, transparent); border-radius:8px; padding:12px; margin-bottom:12px; }
+  .result-head { font-weight:600; margin-bottom:8px; overflow-wrap:anywhere; }
+  .kind { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--mut); margin-right:4px; }
+  .copy { background:var(--bg); border-radius:6px; padding:10px; margin-top:8px; }
+  .copy-top { display:flex; gap:8px; align-items:baseline; margin-bottom:6px; }
+  .printer { font-size:12px; font-weight:600; color:#fff; background:var(--acc); border-radius:4px; padding:1px 8px; }
+  input.rename { font:inherit; font-size:14px; width:100%; box-sizing:border-box; background:var(--card); color:var(--fg); border:1px solid var(--mut); border-radius:5px; padding:6px 8px; }
+  input.rename:focus { outline:2px solid var(--acc); border-color:transparent; }
   .rename-err { font-size:12px; }
+  ul.notes { margin:8px 0 4px; padding:0; list-style:none; font-size:13px; }
+  ul.notes li { padding:4px 8px; border-left:3px solid color-mix(in srgb, var(--mut) 40%, transparent); margin-bottom:4px; color:var(--mut); }
+  ul.notes li.warn { border-left-color:var(--warn); color:var(--fg); background:color-mix(in srgb, var(--warn) 12%, transparent); }
+  ul.notes li.info { color:var(--mut); }
+  .skips { font-size:12px; color:var(--mut); margin-top:8px; }
+  .skips span { display:inline-block; margin-right:12px; }
   tr.chg td { background:color-mix(in srgb, var(--warn) 15%, transparent); }
 </style>
 </head>
@@ -143,15 +156,20 @@ $('go').onclick = () => {
   try { res = PC.convertAll(chosen, targets); }
   catch (err) { $('out').innerHTML = `<span class="err">${esc(err.message)}</span>`; return; }
   $('status').textContent = `${res.files.length} preset copy(ies) created.`;
+  // One card per source preset; each copy gets a full-width name box, its notes, and a preview.
   let fileIdx = 0;
-  $('out').innerHTML = `<table><tr><th></th><th>From</th><th>To <span class="mut">(click a name to rename)</span></th><th>Notes</th></tr>${res.rows.map(r => {
-    const i = r.status === 'ok' ? fileIdx++ : -1;
-    const to = i >= 0 ? `<input class="rename" data-f="${i}" value="${esc(r.to)}" title="Name it will have in Bambu Studio">
-        <div class="err rename-err" data-err="${i}"></div>` : esc(r.to);
-    return `<tr><td class="${r.status}">${r.status}</td><td><span class="mut">${r.kind}</span> ${esc(r.from)}</td>
-      <td>${to}${r.nozzles ? ` <span class="mut">(${r.nozzles.join('/')} mm)</span>` : ''}${i >= 0 ? previewHtml(r, i) : ''}</td>
-      <td class="note">${(r.notes || []).map(esc).join('<br>')}</td></tr>`;
-  }).join('')}</table><p id="dl"></p>`;
+  const groups = new Map();
+  for (const r of res.rows) {
+    if (r.status === 'ok') r.file = fileIdx++;
+    const key = r.kind + '\n' + r.from;
+    (groups.get(key) || groups.set(key, []).get(key)).push(r);
+  }
+  $('out').innerHTML = [...groups.values()].map(rows => {
+    const ok = rows.filter(r => r.status === 'ok'), skipped = rows.filter(r => r.status !== 'ok');
+    return `<div class="result"><div class="result-head"><span class="kind">${rows[0].kind}</span> ${esc(rows[0].from)}</div>
+      ${ok.map(copyHtml).join('')}
+      ${skipped.length ? `<div class="skips">Skipped: ${skipped.map(r => `<span><b>${esc(r.printer)}</b> ${esc(r.notes.join('; '))}</span>`).join('')}</div>` : ''}</div>`;
+  }).join('') + '<p id="dl"></p>';
   document.querySelectorAll('[data-json]').forEach(a => a.onclick = () => {
     const f = res.files[+a.dataset.json];
     download(new Blob([f.data], { type: 'application/json' }), f.name + '.json');
@@ -168,6 +186,23 @@ $('go').onclick = () => {
   btn.onclick = () => { const b = PC.makeBundle(res.files); download(b.blob, b.fileName); };
   $('dl').append(btn, ` (${res.files.length} preset${res.files.length > 1 ? 's' : ''}, one .bbsflmt or .zip file). In Bambu Studio: File > Import > Import Configs, pick this file.`);
 };
+
+// Notes that ask you to do something are highlighted; routine ones are muted.
+function noteClass(n) {
+  if (/^ESTIMATED|calibration|BOTH nozzles|dropped/.test(n)) return 'warn';
+  if (/^extruder types not in source|^locked to/.test(n)) return 'info';
+  return '';
+}
+
+function copyHtml(r) {
+  const i = r.file;
+  return `<div class="copy">
+    <div class="copy-top"><span class="printer">${esc(r.printer)}</span><span class="mut">${r.nozzles.join('/')} mm</span></div>
+    <input class="rename" data-f="${i}" value="${esc(r.to)}" title="Name it will have in Bambu Studio (click to rename)">
+    <div class="err rename-err" data-err="${i}"></div>
+    ${r.notes.length ? `<ul class="notes">${r.notes.map(n => `<li class="${noteClass(n)}">${esc(n)}</li>`).join('')}</ul>` : ''}
+    ${previewHtml(r, i)}</div>`;
+}
 
 // Collapsible setting-by-setting comparison, plus a single-file download link.
 function previewHtml(r, i) {
