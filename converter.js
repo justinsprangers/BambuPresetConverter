@@ -68,6 +68,25 @@
     const known = new Set(db().P.filamentKeys || []);
     return Object.keys(obj).filter(k => known.has(k) && !META.has(k) && !NOT_COPIED.test(k));
   }
+  // Keep only a custom filament's real tuning: drop settings equal to the Generic base it is re-based on
+  // (they are just Bambu's defaults for the source printer), and blank values, which Bambu's importer
+  // cannot parse (it then silently skips the whole preset).
+  function pruneToTuning(values, generic) {
+    const P = db().P, K = P.filamentKeys || [];
+    const same = (a, b) => a === b || (/^-?[\d.]+$/.test(a) && /^-?[\d.]+$/.test(b) && +a === +b);
+    const out = {};
+    for (const [k, v] of Object.entries(values)) {
+      const vals = [].concat(v);
+      if (vals.some(x => x === '')) continue;
+      // Settings Generic doesn't set are program defaults on the source printer, not tuning; the target's own apply.
+      const gi = generic.g ? generic.g[K.indexOf(k)] : -1;
+      if (gi < 0) continue;
+      const def = JSON.parse(P.gvals[gi]);
+      if (vals.length === def.length ? vals.every((x, i) => same(x, def[i])) : vals.length === 1 && same(vals[0], def[0])) continue;
+      out[k] = v;
+    }
+    return out;
+  }
 
   function fromUserJson(j, origin) {
     if (!j || typeof j.name !== 'string') return { skip: 'not a preset file' };
@@ -77,8 +96,9 @@
       const type = [].concat(j.filament_type || [])[0], printers = (j.compatible_printers || []).filter(parseCompat);
       const g = type && printers.length && 'filament_settings_id' in j && genericBase(type, printers[0]);
       if (!g) return { skip: 'standalone custom preset with no Bambu Generic preset of its type for its printer; not supported' };
-      const values = {};
+      let values = {};
       for (const k of customKeys(j)) values[k] = j[k];
+      values = pruneToTuning(values, g);
       return { preset: { kind: 'filament', name: j.name, inherits: g.n, values, variants: j.filament_extruder_variant || null,
         compatible: printers, version: j.version, origin, customBase: '(standalone custom preset)' } };
     }
@@ -118,17 +138,17 @@
     const projPrinter = cfg.printer_model && cfg.nozzle_diameter ? compat(cfg.printer_model, [].concat(cfg.nozzle_diameter)[0]) : cfg.printer_settings_id;
 
     ids.forEach((name, i) => {
-      let base = groups[i + 1], keys = keysOf(diffs[i + 1]), customBase = null;
+      let base = groups[i + 1], keys = keysOf(diffs[i + 1]), customBase = null, generic = null;
       if (!base) { out.push({ skip: `${name}: stock Bambu preset; nothing to convert`, origin }); return; }
       if (!D.byName.filament.has(base)) {
         // Custom base: the merged config holds all of its settings, so copy them all onto Bambu's Generic preset.
         const g = parseCompat(projPrinter) && genericBase([].concat(cfg.filament_type || [])[i], projPrinter);
         if (!g) { out.push(custom('filament', name, base)); return; }
-        customBase = base; base = g.n; keys = customKeys(cfg);
+        customBase = base; base = g.n; keys = customKeys(cfg); generic = g;
       }
       const pos = selfIdx ? selfIdx.map((s, p) => (s === String(i + 1) ? p : -1)).filter(p => p >= 0) : null;
       const variants = pos ? pos.map(p => cfg.filament_extruder_variant[p]) : null;
-      const values = {};
+      let values = {};
       for (const k of keys) {
         const v = cfg[k];
         if (!Array.isArray(v)) values[k] = v;
@@ -136,6 +156,7 @@
         else if (v.length === ids.length) values[k] = [v[i]];
         else values[k] = v;
       }
+      if (generic) values = pruneToTuning(values, generic);
       out.push({ preset: { kind: 'filament', name, inherits: base, values, variants, version: cfg.version, origin,
         compatible: customBase ? [projPrinter] : null, customBase } });
     });
@@ -264,7 +285,7 @@
       (byBase.get(cand) || byBase.set(cand, []).get(cand)).push(noz);
     }
     for (const [base, nozzles] of byBase) {
-      const notes = src.customBase ? [`custom filament (based on ${src.customBase.startsWith('(') ? 'no Bambu preset' : `"${src.customBase}"`}): re-based on Bambu's "${base.n}" with all its settings copied`] : [];
+      const notes = src.customBase ? [`custom filament (based on ${src.customBase.startsWith('(') ? 'no Bambu preset' : `"${src.customBase}"`}): re-based on Bambu's "${base.n}" with its ${Object.keys(src.values).length} settings that differ from Generic copied`] : [];
       const mapped = mapValues(src, srcBase, base, notes);
       const baseNoz = coverage(base.c).get(targetPrinter);
       // Use Bambu's own suffix ("@BBL A1M") only when that base is specific to the target printer.

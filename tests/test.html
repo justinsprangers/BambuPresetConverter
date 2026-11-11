@@ -108,7 +108,8 @@
   // .3mf whose filament is based on someone's custom "Create filament" preset
   const customProj = { ...F.project, inherits_group: [F.project.inherits_group[0], 'Siraya Tech TPU TPU 95A @Bambu Lab P1S 0.4 nozzle', F.project.inherits_group[2]] };
   const cp = PC.fromProject(customProj, 'x.3mf').filter(x => x.preset).map(x => x.preset).find(p => p.customBase);
-  t('3mf: custom base re-based on Generic of its type', cp && /^Generic /.test(cp.inherits) && Object.keys(cp.values).length > 50, cp && [cp.inherits, Object.keys(cp.values).length]);
+  t('3mf: custom base re-based on Generic of its type', cp && /^Generic /.test(cp.inherits) && Object.keys(cp.values).length > 0, cp && [cp.inherits, Object.keys(cp.values).length]);
+  t('3mf: custom copies no blank values (Bambu import skips the preset)', cp && Object.values(cp.values).every(v => ![].concat(v).includes('')), cp && cp.values);
   r = cp ? ok(PC.convertPreset(cp, A1)) : [];
   t('3mf: custom filament converts with note', r[0] && /^Generic /.test(r[0].json.inherits) && r[0].notes.some(n => /custom filament/.test(n)), r[0] && r[0].notes);
   const noType = { ...customProj, filament_type: ['NOT A TYPE', 'NOT A TYPE'] };
