@@ -19,11 +19,12 @@ Own git repo (split out of C:\Claude with history), AGPL-3.0. Public repo: no pe
 - H2D variants repeat per extruder (DD Standard twice); values map by variant name.
 - Name suffix: Bambu's "@BBL XX" only if the base is specific to the target; else "@BBL <printer>".
 - Custom filaments ("Create filament", vendor presets in a .3mf) are not in any Bambu install. Re-based on the Generic (vendor field) preset with the same `filament_type` (snapshot `t`) covering the source printer; all settings in `filamentKeys` copied. Source printer for .3mf = printer_model + nozzle_diameter.
-- Bowden estimate (only when source has no Bowden variant): equal Bambu defaults -> copy DD value; else scale by target's Bowden/DD default ratio; differing 0/1 switches stay nil. Note says "ESTIMATED".
+- Bowden estimate (only when source has no Bowden variant) is a CAP, not a ratio (user pushed back on linear scaling; confirmed): Bambu blog says aux max 200 mm/s, 1000 mm/s^2, much higher K; profiles show one fixed Bowden value per key (outer wall always 50 for DD 60..500). speed/accel/volumetric keys -> min(DD value, Bambu Bowden value); pressure_advance/flow_ratio never copied (calibrate); others copied only if Bambu's defaults are equal. Single pressure_advance shared by both nozzles -> warning note.
 - Browser caches profiles.js; after regenerating, fetch with cache:'reload' before testing.
 - License is AGPL-3.0 because profiles.js is derived from Bambu Studio's AGPL presets.
 
 ## Log
+2026-11-11: Bowden estimate changed from ratio scaling to Bambu's caps; flow/PA not copied; 51 tests pass
 2026-11-11: v5 custom filaments, Bowden estimates, snapshot adds filament type + key list; 49 tests pass
 2026-11-11: rename copies before download (renameFile); clear skip for .3mf custom bases
 2026-10-22: split into its own repo (C:\Claude ignores it), added AGPL-3.0 license

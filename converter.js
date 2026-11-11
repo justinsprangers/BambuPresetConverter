@@ -182,13 +182,15 @@
       const ki = srcVK.indexOf(k);
       return ki >= 0 && srcBase.d && SV.length === srcBase.v.length ? srcBase.d[ki][i] : undefined;
     };
-    const out = {}, untuned = new Set(), estimated = new Set();
+    const out = {}, untuned = new Set(), capped = new Set(), copied = new Set(), calib = new Set();
     const tgtVKList = variantKeys(tgtBase);
     const isBowden = v => /Bowden/i.test(v), srcHasBowden = SV.some(isBowden);
     const num = x => /^-?\d+(\.\d+)?$/.test(x);
-    const places = x => (String(x).split('.')[1] || '').length;
-    // Estimate a Bowden value from the user's direct-drive value: copy it where Bambu's defaults are the same for both,
-    // otherwise scale it by Bambu's Bowden / direct-drive default ratio (e.g. outer wall 200 -> 50 means x0.25).
+    // Estimate a Bowden (X2D auxiliary) value from the user's direct-drive value. Bambu treats Bowden as a hard limit
+    // (max 200 mm/s, 1000 mm/s^2; its profiles use one fixed Bowden value whatever the DD value), so:
+    // - speeds/accelerations/flow limits: the user's value, capped at Bambu's Bowden value;
+    // - pressure advance and flow ratio: never copied (Bowden K is much higher); calibrate on the printer;
+    // - anything else: copied only where Bambu uses the same value for both, else Bambu's Bowden default.
     const estimateBowden = (k, perVariant, i) => {
       const ki = tgtVKList.indexOf(k);
       if (ki < 0 || !tgtBase.d) return 'nil';
@@ -196,11 +198,12 @@
       const from = perVariant.has(dd) && perVariant.get(dd) !== 'nil' ? dd : DEFAULT_VARIANT;
       const val = perVariant.get(from), j = TV.indexOf(from);
       if (val === undefined || val === 'nil' || j < 0) return 'nil';
+      if (/pressure_advance|flow_ratio/.test(k)) { calib.add(k); return 'nil'; }
       const dDD = tgtBase.d[ki][j], dB = tgtBase.d[ki][i];
-      if (dDD === dB) return val;
-      if (!num(val) || !num(dDD) || !num(dB) || +dDD === 0) return 'nil';
-      if (/^[01]$/.test(dDD) && /^[01]$/.test(dB)) return 'nil'; // on/off switch Bambu sets differently for Bowden
-      return String(+(val * dB / dDD).toFixed(Math.max(places(val), places(dB))));
+      const isLimit = /speed|acceleration|volumetric/.test(k) && num(val) && num(dB) && +dB > 0 && !/^[01]$/.test(dB);
+      if (isLimit) { capped.add(k); return +val > +dB ? dB : val; }
+      if (dDD === dB) { copied.add(k); return val; }
+      return 'nil';
     };
     for (const [k, val] of Object.entries(src.values)) {
       const arr = Array.isArray(val) ? val : null;
@@ -219,7 +222,7 @@
         TV.forEach((v, i) => {
           if (perVariant.has(v)) return;
           if (isBowden(v) && !srcHasBowden) vals[i] = estimateBowden(k, perVariant, i);
-          if (vals[i] === 'nil') untuned.add(v); else estimated.add(k);
+          if (vals[i] === 'nil') untuned.add(v);
         });
         if (vals.some(x => x !== 'nil')) out[k] = vals;
         else notes.push(`${k} dropped (only changed for ${edited.join(', ')})`);
@@ -229,10 +232,15 @@
         else notes.push(`${k} dropped (only changed for ${edited.join(', ')})`);
       }
     }
-    if (estimated.size) {
-      const list = [...estimated].sort(), shown = list.slice(0, 6).join(', ') + (list.length > 6 ? ` and ${list.length - 6} more (see preview)` : '');
-      notes.push(`ESTIMATED Bowden values for ${shown}: your direct-drive values, scaled where Bambu's Bowden defaults differ. Test print and tune the Bowden side before relying on them`);
-    }
+    const few = set => { const l = [...set].sort(); return l.slice(0, 6).join(', ') + (l.length > 6 ? ` and ${l.length - 6} more (see preview)` : ''); };
+    if (capped.size || copied.size) notes.push('ESTIMATED Bowden (aux nozzle) values: ' +
+      [capped.size && `${few(capped)} = your direct-drive value, capped at Bambu's Bowden limit`,
+       copied.size && `${few(copied)} copied (Bambu uses the same value for both)`].filter(Boolean).join('; ') +
+      '. Test print the aux nozzle before relying on them');
+    // A single pressure advance value (not per extruder on these bases) would apply to the Bowden side too.
+    if (TV.some(isBowden) && !srcHasBowden && 'pressure_advance' in out && !tgtVK.has('pressure_advance'))
+      notes.push('pressure_advance applies to BOTH nozzles in this preset, but the Bowden aux nozzle needs a much higher K; turn it off in the preset and use Flow Dynamics calibration per nozzle');
+    if (calib.size) notes.push(`${[...calib].sort().join(', ')} not copied to Bowden (aux nozzle needs its own); run Flow Dynamics and Flow Rate calibration on the aux nozzle`);
     if (untuned.size) notes.push(`extruder types not in source (${[...untuned].join(', ')}) use Bambu defaults for other per-extruder settings`);
     return { values: out, variants: TV };
   }

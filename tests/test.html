@@ -40,11 +40,17 @@
   t('A1->X2D DD Standard + estimated Bowden', b04 && JSON.stringify(b04.json.nozzle_temperature) === '["220","nil","220","220"]', b04 && b04.json.nozzle_temperature);
   t('A1->X2D estimate note', b04 && b04.notes.some(n => /ESTIMATED Bowden/.test(n)), b04 && b04.notes);
 
-  // Bowden estimate scales by Bambu's Bowden / direct-drive default ratio (X2D outer wall: 200 DD, 50 Bowden).
-  const ddProc = { kind: 'process', name: 'Slow walls', inherits: '0.20mm Standard @BBL A1M', values: { outer_wall_speed: ['100'] }, variants: null, compatible: null, version: '2.0.0.0' };
+  // Bowden is a speed limit: the DD value capped at Bambu's Bowden value (X2D outer wall: 50 Bowden).
+  const ddProc = { kind: 'process', name: 'Walls', inherits: '0.20mm Standard @BBL A1M', values: { outer_wall_speed: ['100'], inner_wall_speed: ['40'] }, variants: null, compatible: null, version: '2.0.0.0' };
   r = ok(PC.convertPreset(ddProc, X2D));
   j = r[0] && r[0].json;
-  t('Bowden estimate scales speeds', j && JSON.stringify(j.outer_wall_speed) === '["100","nil","25","25"]', j && j.outer_wall_speed);
+  t('Bowden: fast speed capped at Bambu limit', j && JSON.stringify(j.outer_wall_speed) === '["100","nil","50","50"]', j && j.outer_wall_speed);
+  t('Bowden: slow speed kept', j && JSON.stringify(j.inner_wall_speed) === '["40","nil","40","40"]', j && j.inner_wall_speed);
+  const ddFil = { kind: 'filament', name: 'Tuned PLA', inherits: 'Generic PLA @BBL A1', values: { filament_flow_ratio: ['0.95'], pressure_advance: ['0.03'] }, variants: null, compatible: null, version: '2.0.0.0' };
+  r = ok(PC.convertPreset(ddFil, X2D));
+  j = r[0] && r[0].json;
+  t('Bowden: flow ratio + pressure advance not copied', j && j.filament_flow_ratio[2] === 'nil' && j.filament_flow_ratio[0] === '0.95' &&
+    r[0].notes.some(n => /Flow Rate calibration/.test(n)) && r[0].notes.some(n => /pressure_advance applies to BOTH/.test(n)), j && [j.filament_flow_ratio, r[0].notes]);
 
   // ---- .3mf: filaments ----
   const proj = fromProj(F.project), fil = proj.filter(p => p.kind === 'filament');
