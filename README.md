@@ -24,14 +24,16 @@ It reads `C:\Program Files\Bambu Studio\resources\profiles\BBL` and rewrites `pr
 - Your preset only stores what you changed from a Bambu base preset (`inherits`).
 - For the target printer, it finds Bambu's base preset of the same family ("Generic TPU", "0.20mm Standard") that supports that printer **at the same nozzle size**, and re-bases your changes onto it.
 - Dual-extruder printers (X2D, H2D...) store some settings once per extruder type. Values are matched by extruder type (e.g. "Direct Drive Standard"). Values you never changed (equal to Bambu's default) are dropped so the target's own defaults apply.
-- Extruder types the source never had (e.g. X2D's Bowden types when converting from an X1C) keep Bambu's defaults for those settings; the note on the copy lists them. Your direct-drive values are **not** copied to Bowden on purpose: retraction and flow tuned for direct drive are wrong for a Bowden path. Tune those in Bambu Studio after importing (pick the Bowden extruder in the preset's extruder selector, edit, save).
+- **Bowden estimates** (X2D's Bowden extruder, when the source had no Bowden values): each setting you changed for direct drive is copied to Bowden where Bambu uses the same default for both, or scaled by Bambu's Bowden / direct-drive default ratio where they differ (e.g. Bambu's X2D outer wall is 200 DD vs 50 Bowden, so your 80 becomes 20). On/off switches Bambu sets differently are left at Bambu's default. The copy's note says **ESTIMATED Bowden values** and lists them. These are starting points: test print and tune them in Bambu Studio (pick the Bowden extruder in the preset's extruder selector, edit, save).
+- Other extruder types the source never had (e.g. H2D's "Direct Drive TPU High Flow") keep Bambu's defaults; the note lists them.
+- **Custom filaments** (made with "Create filament", e.g. `Polymaker PLA Basic @Bambu Lab P1S 0.4 nozzle`, or a vendor's preset inside a `.3mf`) aren't based on a Bambu system preset. They are re-based on Bambu's Generic preset of the same filament type (e.g. "Generic TPU") for the target, with **all** their settings copied, so they keep their vendor, temperatures, flow and speeds.
 - Copies apply only to nozzle sizes the source applied to. If Bambu's base covers more sizes or printers, the copy gets an explicit `compatible_printers` lock. A final check aborts if any copy would reach another nozzle size.
 
 ## Limits
 - Re-check flow ratio, pressure advance, max volumetric speed and speeds/accelerations on the new printer; they're copied as-is.
 - If Bambu has no base of the same family for the target (e.g. a printer-specific profile), that copy is skipped.
-- Standalone custom presets (Bambu's `filament/base` folder, no `inherits`) and printer presets are skipped.
-- A `.3mf` whose filament is based on someone else's custom preset (made with Bambu's "Create filament", named like `Vendor Type Name @Bambu Lab P1S 0.4 nozzle`) is skipped: the `.3mf` stores only the changes from that preset, not the preset itself.
+- Printer presets are skipped. Custom filaments whose type has no Bambu Generic preset on their printer are skipped.
+- Saved presets that inherit from one of your custom filaments (not from a Bambu preset) are skipped; convert the custom filament itself instead.
 
 ## Files
 - `index.html`: the page. `converter.js`: logic. `profiles.js`: generated snapshot. `update-profiles.ps1`: makes the snapshot.

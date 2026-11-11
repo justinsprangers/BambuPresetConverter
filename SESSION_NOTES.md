@@ -1,14 +1,13 @@
 ﻿# BambuPresetConverter: session notes
 
 ## Status
-v4: filament + process presets from .json, .3mf, .bbsflmt, or a whole folder. Settings preview per copy, single-file download (.bbsflmt / .zip). 41 tests pass (brute force: 134 copies, all nozzle-safe). Ran all 148 files in the user's Bambu user folder: 486 copies, no safety stops.
+v5: filament + process presets from .json, .3mf, .bbsflmt, or a whole folder. Rename copies before download, settings preview, single-file download. Custom filaments (standalone or .3mf custom base) convert via Generic-of-type. Bowden values estimated on X2D. 49 tests pass (brute force: 134 copies, all nozzle-safe). User's full user folder + PEBall.3mf: 936 copies, no safety stops.
 User confirmed a v2 filament import into Bambu Studio worked.
 Own git repo (split out of C:\Claude with history), AGPL-3.0. Public repo: no personal info in these notes.
 
 ## Next steps
-- Publish to GitHub from GitHub Desktop (user doing it; repo is committed locally, no remote yet).
-- Import a converted process preset and a .bbsflmt/.zip bundle in Bambu Studio; confirm both load.
-- Possible: support standalone custom presets (`filament/base/*.json`, no `inherits`, full settings + explicit compatible_printers). The user has ~30 of these.
+- Import a converted custom filament and an X2D copy with estimated Bowden values in Bambu Studio; confirm they load and print.
+- Possible: user presets that inherit a custom filament (2 skipped); resolve the chain when both are loaded.
 - Idea offered, not built: family fallback (e.g. "Bambu TPU 95A HF" -> "Generic TPU").
 
 ## Decisions & gotchas
@@ -19,14 +18,14 @@ Own git repo (split out of C:\Claude with history), AGPL-3.0. Public repo: no pe
 - Bambu import (PresetBundle::import_presets): reads every file in .bbsflmt/.bbscfg/.zip by basename, ignores bundle_structure.json, picks type from *_settings_id, version must parse as semver (we strip leading zeros).
 - H2D variants repeat per extruder (DD Standard twice); values map by variant name.
 - Name suffix: Bambu's "@BBL XX" only if the base is specific to the target; else "@BBL <printer>".
-
+- Custom filaments ("Create filament", vendor presets in a .3mf) are not in any Bambu install. Re-based on the Generic (vendor field) preset with the same `filament_type` (snapshot `t`) covering the source printer; all settings in `filamentKeys` copied. Source printer for .3mf = printer_model + nozzle_diameter.
+- Bowden estimate (only when source has no Bowden variant): equal Bambu defaults -> copy DD value; else scale by target's Bowden/DD default ratio; differing 0/1 switches stay nil. Note says "ESTIMATED".
+- Browser caches profiles.js; after regenerating, fetch with cache:'reload' before testing.
 - License is AGPL-3.0 because profiles.js is derived from Bambu Studio's AGPL presets.
 
-- .3mf filaments can inherit a vendor's "Create filament" custom preset (e.g. "Siraya Tech TPU TPU 95A @Bambu Lab P1S 0.4 nozzle"); not in any Bambu install, .3mf has only the diff. Skipped with a clear reason.
-- Direct-drive values are never copied to Bowden variants (X2D); Bowden keeps Bambu defaults, user tunes in Studio.
-
 ## Log
-2026-11-11: rename copies before download (renameFile); clear skip for .3mf custom bases; 44 tests pass
+2026-11-11: v5 custom filaments, Bowden estimates, snapshot adds filament type + key list; 49 tests pass
+2026-11-11: rename copies before download (renameFile); clear skip for .3mf custom bases
 2026-10-22: split into its own repo (C:\Claude ignores it), added AGPL-3.0 license
 2026-10-22: v4 settings preview, single-file bundle output, folder input, skip non-Bambu/printer presets
 2026-10-22: v3 process presets, default stripping, select all, remembered targets

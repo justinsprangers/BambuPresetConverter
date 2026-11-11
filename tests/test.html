@@ -36,7 +36,15 @@
   const b04 = r.find(x => x.nozzles.join() === '0.4'), b68 = r.find(x => x.nozzles.join() === '0.6,0.8');
   t('A1->X2D 0.4 base', b04 && b04.json.inherits === 'Generic TPU @BBL X2D 0.4 nozzle');
   t('A1->X2D 0.6/0.8 base', b68 && b68.json.inherits === 'Generic TPU @BBL X2D');
-  t('A1->X2D DD Standard only', b04 && JSON.stringify(b04.json.nozzle_temperature) === '["220","nil","nil","nil"]', b04 && b04.json.nozzle_temperature);
+  // Bowden slots are estimated from the direct-drive value (Bambu's defaults are equal here, so it is copied); DD High Flow stays default.
+  t('A1->X2D DD Standard + estimated Bowden', b04 && JSON.stringify(b04.json.nozzle_temperature) === '["220","nil","220","220"]', b04 && b04.json.nozzle_temperature);
+  t('A1->X2D estimate note', b04 && b04.notes.some(n => /ESTIMATED Bowden/.test(n)), b04 && b04.notes);
+
+  // Bowden estimate scales by Bambu's Bowden / direct-drive default ratio (X2D outer wall: 200 DD, 50 Bowden).
+  const ddProc = { kind: 'process', name: 'Slow walls', inherits: '0.20mm Standard @BBL A1M', values: { outer_wall_speed: ['100'] }, variants: null, compatible: null, version: '2.0.0.0' };
+  r = ok(PC.convertPreset(ddProc, X2D));
+  j = r[0] && r[0].json;
+  t('Bowden estimate scales speeds', j && JSON.stringify(j.outer_wall_speed) === '["100","nil","25","25"]', j && j.outer_wall_speed);
 
   // ---- .3mf: filaments ----
   const proj = fromProj(F.project), fil = proj.filter(p => p.kind === 'filament');
@@ -93,8 +101,19 @@
 
   // .3mf whose filament is based on someone's custom "Create filament" preset
   const customProj = { ...F.project, inherits_group: [F.project.inherits_group[0], 'Siraya Tech TPU TPU 95A @Bambu Lab P1S 0.4 nozzle', F.project.inherits_group[2]] };
-  const cr = PC.fromProject(customProj, 'x.3mf');
-  t('3mf: custom base skipped with clear reason', cr.some(x => x.skip && /custom preset/.test(x.skip)) && cr.filter(x => x.preset).length === 2, cr.map(x => x.skip || x.preset.name));
+  const cp = PC.fromProject(customProj, 'x.3mf').filter(x => x.preset).map(x => x.preset).find(p => p.customBase);
+  t('3mf: custom base re-based on Generic of its type', cp && /^Generic /.test(cp.inherits) && Object.keys(cp.values).length > 50, cp && [cp.inherits, Object.keys(cp.values).length]);
+  r = cp ? ok(PC.convertPreset(cp, A1)) : [];
+  t('3mf: custom filament converts with note', r[0] && /^Generic /.test(r[0].json.inherits) && r[0].notes.some(n => /custom filament/.test(n)), r[0] && r[0].notes);
+  const noType = { ...customProj, filament_type: ['NOT A TYPE', 'NOT A TYPE'] };
+  t('3mf: custom base with no Generic match skipped', PC.fromProject(noType, 'x.3mf').some(x => x.skip && /custom preset/.test(x.skip)));
+
+  // standalone custom preset (no inherits)
+  const sa = PC.fromUserJson({ name: 'My PLA', from: 'User', filament_settings_id: ['My PLA'], filament_type: ['PLA'], filament_vendor: ['Acme'],
+    compatible_printers: ['Bambu Lab P1S 0.4 nozzle'], nozzle_temperature: ['215'] }, 'x').preset;
+  r = sa ? ok(PC.convertPreset(sa, A1)) : [];
+  t('standalone custom -> A1', r[0] && /^Generic PLA/.test(r[0].json.inherits) && r[0].json.nozzle_temperature[0] === '215' && r[0].json.filament_vendor[0] === 'Acme' &&
+    JSON.stringify(r[0].json.compatible_printers) === '["Bambu Lab A1 0.4 nozzle"]', r[0] && r[0].json);
 
   // preview
   const ch = all.rows.find(r => r.kind === 'process').changes;

@@ -57,11 +57,31 @@
   // ---- reading inputs into source presets: {kind, name, inherits, values, variants, origin} ----
   const dec = new TextDecoder(), enc = new TextEncoder();
 
+  // Custom filaments (Bambu's "Create filament", or a vendor's) aren't Bambu system presets but carry every setting.
+  // They are re-based on Bambu's Generic preset of the same filament type, with all their settings copied.
+  const NOT_COPIED = /^(compatible_|inherits$|instantiation$)/;
+  function genericBase(type, compatStr) {
+    const c = db().P.filaments.filter(f => f.f === 'Generic' && f.t === type && f.c.includes(compatStr));
+    return c.sort((a, b) => family(a.n).length - family(b.n).length || a.n.length - b.n.length)[0] || null;
+  }
+  function customKeys(obj) {
+    const known = new Set(db().P.filamentKeys || []);
+    return Object.keys(obj).filter(k => known.has(k) && !META.has(k) && !NOT_COPIED.test(k));
+  }
+
   function fromUserJson(j, origin) {
     if (!j || typeof j.name !== 'string') return { skip: 'not a preset file' };
     if (j.from === 'system') return { skip: 'stock Bambu preset; nothing to convert' };
     if ('printer_settings_id' in j || j.type === 'machine') return { skip: 'printer preset; only filament and process presets are supported' };
-    if (!j.inherits) return { skip: 'standalone custom preset (not based on a Bambu preset); not supported' };
+    if (!j.inherits) {
+      const type = [].concat(j.filament_type || [])[0], printers = (j.compatible_printers || []).filter(parseCompat);
+      const g = type && printers.length && 'filament_settings_id' in j && genericBase(type, printers[0]);
+      if (!g) return { skip: 'standalone custom preset with no Bambu Generic preset of its type for its printer; not supported' };
+      const values = {};
+      for (const k of customKeys(j)) values[k] = j[k];
+      return { preset: { kind: 'filament', name: j.name, inherits: g.n, values, variants: j.filament_extruder_variant || null,
+        compatible: printers, version: j.version, origin, customBase: '(standalone custom preset)' } };
+    }
     const D = db();
     const kind = D.byName.process.has(j.inherits) ? 'process' : D.byName.filament.has(j.inherits) ? 'filament' : null;
     if (!kind) return { skip: `based on "${j.inherits}", which is not a Bambu Lab system preset` };
@@ -94,21 +114,30 @@
       }
     }
 
+    // The printer the project was set up for, e.g. "Bambu Lab P1S 0.4 nozzle".
+    const projPrinter = cfg.printer_model && cfg.nozzle_diameter ? compat(cfg.printer_model, [].concat(cfg.nozzle_diameter)[0]) : cfg.printer_settings_id;
+
     ids.forEach((name, i) => {
-      const base = groups[i + 1];
+      let base = groups[i + 1], keys = keysOf(diffs[i + 1]), customBase = null;
       if (!base) { out.push({ skip: `${name}: stock Bambu preset; nothing to convert`, origin }); return; }
-      if (custom('filament', name, base)) { out.push(custom('filament', name, base)); return; }
+      if (!D.byName.filament.has(base)) {
+        // Custom base: the merged config holds all of its settings, so copy them all onto Bambu's Generic preset.
+        const g = parseCompat(projPrinter) && genericBase([].concat(cfg.filament_type || [])[i], projPrinter);
+        if (!g) { out.push(custom('filament', name, base)); return; }
+        customBase = base; base = g.n; keys = customKeys(cfg);
+      }
       const pos = selfIdx ? selfIdx.map((s, p) => (s === String(i + 1) ? p : -1)).filter(p => p >= 0) : null;
       const variants = pos ? pos.map(p => cfg.filament_extruder_variant[p]) : null;
       const values = {};
-      for (const k of keysOf(diffs[i + 1])) {
+      for (const k of keys) {
         const v = cfg[k];
         if (!Array.isArray(v)) values[k] = v;
         else if (selfIdx && v.length === selfIdx.length) values[k] = pos.map(p => v[p]);
         else if (v.length === ids.length) values[k] = [v[i]];
         else values[k] = v;
       }
-      out.push({ preset: { kind: 'filament', name, inherits: base, values, variants, compatible: null, version: cfg.version, origin } });
+      out.push({ preset: { kind: 'filament', name, inherits: base, values, variants, version: cfg.version, origin,
+        compatible: customBase ? [projPrinter] : null, customBase } });
     });
     return out;
   }
@@ -153,7 +182,26 @@
       const ki = srcVK.indexOf(k);
       return ki >= 0 && srcBase.d && SV.length === srcBase.v.length ? srcBase.d[ki][i] : undefined;
     };
-    const out = {}, untuned = new Set();
+    const out = {}, untuned = new Set(), estimated = new Set();
+    const tgtVKList = variantKeys(tgtBase);
+    const isBowden = v => /Bowden/i.test(v), srcHasBowden = SV.some(isBowden);
+    const num = x => /^-?\d+(\.\d+)?$/.test(x);
+    const places = x => (String(x).split('.')[1] || '').length;
+    // Estimate a Bowden value from the user's direct-drive value: copy it where Bambu's defaults are the same for both,
+    // otherwise scale it by Bambu's Bowden / direct-drive default ratio (e.g. outer wall 200 -> 50 means x0.25).
+    const estimateBowden = (k, perVariant, i) => {
+      const ki = tgtVKList.indexOf(k);
+      if (ki < 0 || !tgtBase.d) return 'nil';
+      const dd = TV[i].replace(/Bowden/i, 'Direct Drive');
+      const from = perVariant.has(dd) && perVariant.get(dd) !== 'nil' ? dd : DEFAULT_VARIANT;
+      const val = perVariant.get(from), j = TV.indexOf(from);
+      if (val === undefined || val === 'nil' || j < 0) return 'nil';
+      const dDD = tgtBase.d[ki][j], dB = tgtBase.d[ki][i];
+      if (dDD === dB) return val;
+      if (!num(val) || !num(dDD) || !num(dB) || +dDD === 0) return 'nil';
+      if (/^[01]$/.test(dDD) && /^[01]$/.test(dB)) return 'nil'; // on/off switch Bambu sets differently for Bowden
+      return String(+(val * dB / dDD).toFixed(Math.max(places(val), places(dB))));
+    };
     for (const [k, val] of Object.entries(src.values)) {
       const arr = Array.isArray(val) ? val : null;
       let perVariant = null; // variant name -> edited value
@@ -168,7 +216,11 @@
       const get = v => (perVariant.has(v) ? perVariant.get(v) : 'nil');
       if (TV.length > 1 && tgtVK.has(k)) {
         const vals = TV.map(get);
-        TV.forEach((v, i) => { if (vals[i] === 'nil' && !perVariant.has(v)) untuned.add(v); });
+        TV.forEach((v, i) => {
+          if (perVariant.has(v)) return;
+          if (isBowden(v) && !srcHasBowden) vals[i] = estimateBowden(k, perVariant, i);
+          if (vals[i] === 'nil') untuned.add(v); else estimated.add(k);
+        });
         if (vals.some(x => x !== 'nil')) out[k] = vals;
         else notes.push(`${k} dropped (only changed for ${edited.join(', ')})`);
       } else {
@@ -177,7 +229,11 @@
         else notes.push(`${k} dropped (only changed for ${edited.join(', ')})`);
       }
     }
-    if (untuned.size) notes.push(`extruder types not in source (${[...untuned].join(', ')}) use Bambu defaults for per-extruder settings`);
+    if (estimated.size) {
+      const list = [...estimated].sort(), shown = list.slice(0, 6).join(', ') + (list.length > 6 ? ` and ${list.length - 6} more (see preview)` : '');
+      notes.push(`ESTIMATED Bowden values for ${shown}: your direct-drive values, scaled where Bambu's Bowden defaults differ. Test print and tune the Bowden side before relying on them`);
+    }
+    if (untuned.size) notes.push(`extruder types not in source (${[...untuned].join(', ')}) use Bambu defaults for other per-extruder settings`);
     return { values: out, variants: TV };
   }
 
@@ -200,7 +256,7 @@
       (byBase.get(cand) || byBase.set(cand, []).get(cand)).push(noz);
     }
     for (const [base, nozzles] of byBase) {
-      const notes = [];
+      const notes = src.customBase ? [`custom filament (based on ${src.customBase.startsWith('(') ? 'no Bambu preset' : `"${src.customBase}"`}): re-based on Bambu's "${base.n}" with all its settings copied`] : [];
       const mapped = mapValues(src, srcBase, base, notes);
       const baseNoz = coverage(base.c).get(targetPrinter);
       // Use Bambu's own suffix ("@BBL A1M") only when that base is specific to the target printer.

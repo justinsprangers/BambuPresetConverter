@@ -122,7 +122,7 @@ async function load(fileList) {
     $('srcCard').hidden = false;
     $('sources').innerHTML = '<table><tr><th></th><th>Type</th><th>Preset</th><th>Works on now</th><th>Based on</th></tr>' + sources.map((p, i) =>
       `<tr><td><input type="checkbox" class="src" data-i="${i}" checked></td><td class="mut">${p.kind}</td><td>${esc(p.name)}</td>
-         <td>${esc(PC.describeSource(p))}</td><td class="mut">${esc(p.inherits)}</td></tr>`).join('') + '</table>' +
+         <td>${esc(PC.describeSource(p))}</td><td class="mut">${esc(p.customBase ? `custom: ${p.customBase} (copies use ${p.inherits})` : p.inherits)}</td></tr>`).join('') + '</table>' +
       (skipped.length ? `<details class="mut"><summary>${skipped.length} file(s) skipped</summary>${skipped.map(r =>
         `${esc(r.origin)}: ${esc(r.skip)}`).join('<br>')}</details>` : '');
     $('status').textContent = `${sources.length} preset(s) ready.`;
