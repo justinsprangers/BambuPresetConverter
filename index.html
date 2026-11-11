@@ -22,6 +22,8 @@
   .mut { color:var(--mut); font-size:12px; }
   .safe { border-left:4px solid var(--acc); }
   details summary { cursor:pointer; } table.diff { margin:6px 0; font-size:12px; } table.diff td { padding:2px 6px; }
+  input.rename { font:inherit; width:100%; box-sizing:border-box; background:var(--bg); color:var(--fg); border:1px solid var(--mut); border-radius:4px; padding:2px 6px; }
+  .rename-err { font-size:12px; }
   tr.chg td { background:color-mix(in srgb, var(--warn) 15%, transparent); }
 </style>
 </head>
@@ -142,22 +144,29 @@ $('go').onclick = () => {
   catch (err) { $('out').innerHTML = `<span class="err">${esc(err.message)}</span>`; return; }
   $('status').textContent = `${res.files.length} preset copy(ies) created.`;
   let fileIdx = 0;
-  $('out').innerHTML = `<table><tr><th></th><th>From</th><th>To</th><th>Notes</th></tr>${res.rows.map(r => {
-    const preview = r.status === 'ok' ? previewHtml(r, fileIdx++) : '';
+  $('out').innerHTML = `<table><tr><th></th><th>From</th><th>To <span class="mut">(click a name to rename)</span></th><th>Notes</th></tr>${res.rows.map(r => {
+    const i = r.status === 'ok' ? fileIdx++ : -1;
+    const to = i >= 0 ? `<input class="rename" data-f="${i}" value="${esc(r.to)}" title="Name it will have in Bambu Studio">
+        <div class="err rename-err" data-err="${i}"></div>` : esc(r.to);
     return `<tr><td class="${r.status}">${r.status}</td><td><span class="mut">${r.kind}</span> ${esc(r.from)}</td>
-      <td>${esc(r.to)}${r.nozzles ? ` <span class="mut">(${r.nozzles.join('/')} mm)</span>` : ''}${preview}</td>
+      <td>${to}${r.nozzles ? ` <span class="mut">(${r.nozzles.join('/')} mm)</span>` : ''}${i >= 0 ? previewHtml(r, i) : ''}</td>
       <td class="note">${(r.notes || []).map(esc).join('<br>')}</td></tr>`;
   }).join('')}</table><p id="dl"></p>`;
   document.querySelectorAll('[data-json]').forEach(a => a.onclick = () => {
     const f = res.files[+a.dataset.json];
     download(new Blob([f.data], { type: 'application/json' }), f.name + '.json');
   });
+  // Renames apply to the copies in memory; downloads always use the current names.
+  document.querySelectorAll('.rename').forEach(inp => inp.onchange = () => {
+    const i = +inp.dataset.f, err = PC.renameFile(res.files, i, inp.value);
+    document.querySelector(`[data-err="${i}"]`).textContent = err || '';
+    if (err) inp.value = res.files[i].name;
+  });
   if (!res.files.length) return;
-  const bundle = PC.makeBundle(res.files);
   const btn = document.createElement('button');
-  btn.textContent = `Download ${bundle.fileName}`;
-  btn.onclick = () => download(bundle.blob, bundle.fileName);
-  $('dl').append(btn, ` (${res.files.length} preset${res.files.length > 1 ? 's' : ''}). In Bambu Studio: File > Import > Import Configs, pick this file.`);
+  btn.textContent = 'Download all';
+  btn.onclick = () => { const b = PC.makeBundle(res.files); download(b.blob, b.fileName); };
+  $('dl').append(btn, ` (${res.files.length} preset${res.files.length > 1 ? 's' : ''}, one .bbsflmt or .zip file). In Bambu Studio: File > Import > Import Configs, pick this file.`);
 };
 
 // Collapsible setting-by-setting comparison, plus a single-file download link.

@@ -84,6 +84,18 @@
   const parsed = all.files.map(f => JSON.parse(new TextDecoder().decode(f.data)));
   t('version has no leading zeros', parsed.every(p => /^\d+(\.\d+)*$/.test(p.version) && !/(^|\.)0\d/.test(p.version)), parsed.map(p => p.version));
 
+  // renaming
+  const rn = PC.convertAll([proc, ...fil], [A1M]).files, fi = rn.findIndex(f => f.kind === 'filament');
+  t('rename: sets name + id', PC.renameFile(rn, fi, ' My TPU ') === null && rn[fi].name === 'My TPU' &&
+    JSON.parse(new TextDecoder().decode(rn[fi].data)).filament_settings_id[0] === 'My TPU', rn[fi].name);
+  const other = rn.findIndex((f, k) => k !== fi && f.kind === 'filament');
+  t('rename: rejects duplicate, empty, bad chars', !!PC.renameFile(rn, other, 'My TPU') && !!PC.renameFile(rn, other, ' ') && !!PC.renameFile(rn, other, 'a/b'));
+
+  // .3mf whose filament is based on someone's custom "Create filament" preset
+  const customProj = { ...F.project, inherits_group: [F.project.inherits_group[0], 'Siraya Tech TPU TPU 95A @Bambu Lab P1S 0.4 nozzle', F.project.inherits_group[2]] };
+  const cr = PC.fromProject(customProj, 'x.3mf');
+  t('3mf: custom base skipped with clear reason', cr.some(x => x.skip && /custom preset/.test(x.skip)) && cr.filter(x => x.preset).length === 2, cr.map(x => x.skip || x.preset.name));
+
   // preview
   const ch = all.rows.find(r => r.kind === 'process').changes;
   const ow = ch.find(c => c.key === 'outer_wall_speed');

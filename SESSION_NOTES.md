@@ -22,7 +22,11 @@ Own git repo (split out of C:\Claude with history), AGPL-3.0. Public repo: no pe
 
 - License is AGPL-3.0 because profiles.js is derived from Bambu Studio's AGPL presets.
 
+- .3mf filaments can inherit a vendor's "Create filament" custom preset (e.g. "Siraya Tech TPU TPU 95A @Bambu Lab P1S 0.4 nozzle"); not in any Bambu install, .3mf has only the diff. Skipped with a clear reason.
+- Direct-drive values are never copied to Bowden variants (X2D); Bowden keeps Bambu defaults, user tunes in Studio.
+
 ## Log
+2026-11-11: rename copies before download (renameFile); clear skip for .3mf custom bases; 44 tests pass
 2026-10-22: split into its own repo (C:\Claude ignores it), added AGPL-3.0 license
 2026-10-22: v4 settings preview, single-file bundle output, folder input, skip non-Bambu/printer presets
 2026-10-22: v3 process presets, default stripping, select all, remembered targets

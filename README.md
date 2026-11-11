@@ -10,7 +10,8 @@ Copies your Bambu Studio **filament and process** presets to other Bambu printer
    - a `.bbsflmt` bundle (File > Export > Export Preset Bundle).
 3. Pick presets and target printers (select all / none links; your printer choice is remembered), click **Convert**.
 4. Optional: open **preview** under any copy to compare your values with the copy's, setting by setting. Highlighted rows are changes the copy doesn't carry (e.g. a Bowden-only setting going to a direct-drive printer).
-5. Download the single file (`.bbsflmt` for filaments only, `.zip` if processes are included). In Bambu Studio: File > Import > Import Configs, pick that file; no unzipping needed. Each preview also has a link to download that one preset as `.json`.
+5. Optional: click a copy's name in the **To** column to rename it. The new name is what Bambu Studio will show; duplicates and characters like `/` are rejected.
+6. Download the single file (`.bbsflmt` for filaments only, `.zip` if processes are included). In Bambu Studio: File > Import > Import Configs, pick that file; no unzipping needed. Each preview also has a link to download that one preset as `.json`.
 
 ## After a Bambu Studio update
 Bambu adds printers and renames base presets. Refresh the snapshot the page uses:
@@ -23,12 +24,14 @@ It reads `C:\Program Files\Bambu Studio\resources\profiles\BBL` and rewrites `pr
 - Your preset only stores what you changed from a Bambu base preset (`inherits`).
 - For the target printer, it finds Bambu's base preset of the same family ("Generic TPU", "0.20mm Standard") that supports that printer **at the same nozzle size**, and re-bases your changes onto it.
 - Dual-extruder printers (X2D, H2D...) store some settings once per extruder type. Values are matched by extruder type (e.g. "Direct Drive Standard"). Values you never changed (equal to Bambu's default) are dropped so the target's own defaults apply.
+- Extruder types the source never had (e.g. X2D's Bowden types when converting from an X1C) keep Bambu's defaults for those settings; the note on the copy lists them. Your direct-drive values are **not** copied to Bowden on purpose: retraction and flow tuned for direct drive are wrong for a Bowden path. Tune those in Bambu Studio after importing (pick the Bowden extruder in the preset's extruder selector, edit, save).
 - Copies apply only to nozzle sizes the source applied to. If Bambu's base covers more sizes or printers, the copy gets an explicit `compatible_printers` lock. A final check aborts if any copy would reach another nozzle size.
 
 ## Limits
 - Re-check flow ratio, pressure advance, max volumetric speed and speeds/accelerations on the new printer; they're copied as-is.
 - If Bambu has no base of the same family for the target (e.g. a printer-specific profile), that copy is skipped.
 - Standalone custom presets (Bambu's `filament/base` folder, no `inherits`) and printer presets are skipped.
+- A `.3mf` whose filament is based on someone else's custom preset (made with Bambu's "Create filament", named like `Vendor Type Name @Bambu Lab P1S 0.4 nozzle`) is skipped: the `.3mf` stores only the changes from that preset, not the preset itself.
 
 ## Files
 - `index.html`: the page. `converter.js`: logic. `profiles.js`: generated snapshot. `update-profiles.ps1`: makes the snapshot.

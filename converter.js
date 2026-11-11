@@ -77,10 +77,15 @@
     const ids = cfg.filament_settings_id || [], groups = cfg.inherits_group || [], diffs = cfg.different_settings_to_system || [];
     const selfIdx = cfg.filament_self_index || null;
     const keysOf = s => (s || '').split(';').filter(Boolean);
-    const out = [];
+    const D = db(), out = [];
+    // A base made with Bambu's "Create filament" (e.g. "Siraya Tech TPU TPU 95A @Bambu Lab P1S 0.4 nozzle") lives only
+    // in its author's Bambu Studio; the .3mf stores just the diff from it, so there is nothing to re-base onto.
+    const custom = (kind, name, base) => (D.byName[kind].has(base) ? null
+      : { skip: `${name}: based on "${base}", a custom preset (not a Bambu system preset), which this file does not include`, origin });
 
     if (cfg.print_settings_id) {
       if (!groups[0]) out.push({ skip: `${cfg.print_settings_id}: stock Bambu process; nothing to convert`, origin });
+      else if (custom('process', cfg.print_settings_id, groups[0])) out.push(custom('process', cfg.print_settings_id, groups[0]));
       else {
         const values = {};
         for (const k of keysOf(diffs[0])) values[k] = cfg[k];
@@ -92,6 +97,7 @@
     ids.forEach((name, i) => {
       const base = groups[i + 1];
       if (!base) { out.push({ skip: `${name}: stock Bambu preset; nothing to convert`, origin }); return; }
+      if (custom('filament', name, base)) { out.push(custom('filament', name, base)); return; }
       const pos = selfIdx ? selfIdx.map((s, p) => (s === String(i + 1) ? p : -1)).filter(p => p >= 0) : null;
       const variants = pos ? pos.map(p => cfg.filament_extruder_variant[p]) : null;
       const values = {};
@@ -218,6 +224,19 @@
     const K = KINDS[kind];
     json.name = name;
     json[K.idField] = K.idIsArray ? [name] : name;
+  }
+
+  // Rename an output file from convertAll before download. Returns an error message, or null if renamed.
+  function renameFile(files, i, newName) {
+    const f = files[i], name = (newName || '').trim();
+    if (!name) return 'Name cannot be empty.';
+    if (/[\\/:*?"<>|]/.test(name)) return 'Name cannot contain \\ / : * ? " < > |';
+    if (files.some((g, k) => k !== i && g.kind === f.kind && g.name === name)) return `Another ${f.kind} copy is already named "${name}".`;
+    const json = JSON.parse(dec.decode(f.data));
+    setName(json, f.kind, name);
+    f.name = name;
+    f.data = enc.encode(JSON.stringify(json, null, 4));
+    return null;
   }
 
   // Hard safety check: the copy may only apply to the target printer at nozzle sizes the source had.
@@ -386,6 +405,6 @@
     return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
   }
 
-  root.PresetConverter = { KINDS, readInputs, makeBundle, describeChanges, fromUserJson, fromProject, convertPreset, convertAll, printerList, describeSource,
+  root.PresetConverter = { KINDS, readInputs, makeBundle, renameFile, describeChanges, fromUserJson, fromProject, convertPreset, convertAll, printerList, describeSource,
     parseCompat, readZip, writeZip, db };
 })(typeof window !== 'undefined' ? window : globalThis);
