@@ -299,9 +299,30 @@
         json.compatible_printers = nozzles.map(n => compat(targetPrinter, n));
         notes.push(`locked to ${nozzles.join('/')} mm on ${shortPrinter(targetPrinter)} (Bambu's base "${base.n}" covers more)`);
       }
+      fillNil(json, base);
       checkNozzles(json, base, srcNozzles, targetPrinter);
       out.push({ json, notes, nozzles });
     }
+    return out;
+  }
+
+  // Bambu accepts "nil" (= use the parent's value) only in some per-extruder settings; anywhere else its importer
+  // fails to parse the file and silently skips it (seen with slow_down_min_speed, filament_overhang_*_speed...).
+  // So write the target base's own value instead, keeping "nil" only where Bambu's default is "nil" itself.
+  function fillNil(json, base) {
+    const keys = variantKeys(base);
+    keys.forEach((k, ki) => {
+      const v = json[k], d = base.d[ki];
+      if (Array.isArray(v) && v.length === d.length) json[k] = v.map((x, i) => (x === 'nil' ? d[i] : x));
+    });
+  }
+  // The reverse, for display: per-extruder values equal to the base's own read as "nil" (not edited).
+  function asEdits(json, kind) {
+    const base = db().byName[kind].get(json.inherits), keys = variantKeys(base), out = { ...json };
+    keys.forEach((k, ki) => {
+      const v = json[k], d = base.d[ki];
+      if (Array.isArray(v) && v.length === d.length) out[k] = v.map((x, i) => (x === d[i] ? 'nil' : x));
+    });
     return out;
   }
 
@@ -387,8 +408,9 @@
       return val.map((x, i) => (x === srcBase.d[ki][i] ? 'nil' : x));
     };
     const keys = new Set([...Object.keys(src.values), ...Object.keys(json).filter(k => !META.has(k))]);
+    const shown = asEdits(json, src.kind);
     return [...keys].sort().map(k => {
-      const before = formatValue(edited(k, src.values[k]), SV), after = formatValue(json[k], TV);
+      const before = formatValue(edited(k, src.values[k]), SV), after = formatValue(shown[k], TV);
       return { key: k, before, after, dropped: after === '(Bambu default)' && before !== '(Bambu default)' };
     });
   }
@@ -490,6 +512,6 @@
     return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
   }
 
-  root.PresetConverter = { KINDS, readInputs, makeBundle, renameFile, describeChanges, fromUserJson, fromProject, convertPreset, convertAll, printerList, describeSource,
+  root.PresetConverter = { KINDS, readInputs, makeBundle, renameFile, describeChanges, asEdits, fromUserJson, fromProject, convertPreset, convertAll, printerList, describeSource,
     parseCompat, readZip, writeZip, db };
 })(typeof window !== 'undefined' ? window : globalThis);

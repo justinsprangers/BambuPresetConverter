@@ -12,6 +12,8 @@
   const X2D = 'Bambu Lab X2D', A1 = 'Bambu Lab A1', A1M = 'Bambu Lab A1 mini', H2D = 'Bambu Lab H2D', P1S = 'Bambu Lab P1S';
   const ok = rs => rs.filter(r => !r.skip);
   const fromProj = cfg => PC.fromProject(cfg, 'x.3mf').filter(x => x.preset).map(x => x.preset);
+  // Copies hold Bambu's own value in untouched extruder slots; E() shows those as "nil" (= not edited).
+  const E = (json, kind) => PC.asEdits(json, kind);
 
   // ---- filament: user .json ----
   let r = ok(PC.convertPreset(src('TPU Fast @BBL X2D 0.4 nozzle'), A1));
@@ -37,19 +39,21 @@
   t('A1->X2D 0.4 base', b04 && b04.json.inherits === 'Generic TPU @BBL X2D 0.4 nozzle');
   t('A1->X2D 0.6/0.8 base', b68 && b68.json.inherits === 'Generic TPU @BBL X2D');
   // Bowden slots are estimated from the direct-drive value (Bambu's defaults are equal here, so it is copied); DD High Flow stays default.
-  t('A1->X2D DD Standard + estimated Bowden', b04 && JSON.stringify(b04.json.nozzle_temperature) === '["220","nil","220","220"]', b04 && b04.json.nozzle_temperature);
+  t('A1->X2D DD Standard + estimated Bowden', b04 && JSON.stringify(E(b04.json, 'filament').nozzle_temperature) === '["220","nil","220","220"]', b04 && b04.json.nozzle_temperature);
+  t('no "nil" written where Bambu cannot read it', b04 && !b04.json.nozzle_temperature.includes('nil'), b04 && b04.json.nozzle_temperature);
   t('A1->X2D estimate note', b04 && b04.notes.some(n => /ESTIMATED Bowden/.test(n)), b04 && b04.notes);
 
   // Bowden is a speed limit: the DD value capped at Bambu's Bowden value (X2D outer wall: 50 Bowden).
   const ddProc = { kind: 'process', name: 'Walls', inherits: '0.20mm Standard @BBL A1M', values: { outer_wall_speed: ['100'], inner_wall_speed: ['40'] }, variants: null, compatible: null, version: '2.0.0.0' };
   r = ok(PC.convertPreset(ddProc, X2D));
   j = r[0] && r[0].json;
-  t('Bowden: fast speed capped at Bambu limit', j && JSON.stringify(j.outer_wall_speed) === '["100","nil","50","50"]', j && j.outer_wall_speed);
-  t('Bowden: slow speed kept', j && JSON.stringify(j.inner_wall_speed) === '["40","nil","40","40"]', j && j.inner_wall_speed);
+  // Raw values: DD High Flow slot holds Bambu's own value (500 / 600), never "nil".
+  t('Bowden: fast speed capped at Bambu limit', j && JSON.stringify(j.outer_wall_speed) === '["100","500","50","50"]', j && j.outer_wall_speed);
+  t('Bowden: slow speed kept', j && JSON.stringify(j.inner_wall_speed) === '["40","600","40","40"]', j && j.inner_wall_speed);
   const ddFil = { kind: 'filament', name: 'Tuned PLA', inherits: 'Generic PLA @BBL A1', values: { filament_flow_ratio: ['0.95'], pressure_advance: ['0.03'] }, variants: null, compatible: null, version: '2.0.0.0' };
   r = ok(PC.convertPreset(ddFil, X2D));
   j = r[0] && r[0].json;
-  t('Bowden: flow ratio + pressure advance not copied', j && j.filament_flow_ratio[2] === 'nil' && j.filament_flow_ratio[0] === '0.95' &&
+  t('Bowden: flow ratio + pressure advance not copied', j && E(j, 'filament').filament_flow_ratio[2] === 'nil' && j.filament_flow_ratio[0] === '0.95' &&
     r[0].notes.some(n => /Flow Rate calibration/.test(n)) && r[0].notes.some(n => /pressure_advance applies to BOTH/.test(n)), j && [j.filament_flow_ratio, r[0].notes]);
 
   // ---- .3mf: filaments ----
@@ -60,7 +64,7 @@
   r = ok(PC.convertPreset(fil[1], A1));
   t('3mf filament->A1', r[0] && r[0].json.filament_max_volumetric_speed[0] === '2.7' && r[0].json.inherits === 'Generic TPU @BBL A1', r);
   r = ok(PC.convertPreset(fil[0], H2D));
-  t('3mf filament->H2D: unedited X2D defaults become nil', r[0] && JSON.stringify(r[0].json.filament_max_volumetric_speed) === JSON.stringify(['5', ...Array(r[0].json.filament_extruder_variant.length - 1).fill('nil')]), r[0] && r[0].json.filament_max_volumetric_speed);
+  t('3mf filament->H2D: unedited X2D defaults become nil', r[0] && JSON.stringify(E(r[0].json, 'filament').filament_max_volumetric_speed) === JSON.stringify(['5', ...Array(r[0].json.filament_extruder_variant.length - 1).fill('nil')]), r[0] && r[0].json.filament_max_volumetric_speed);
 
   // ---- .3mf: process ----
   const proc = proj.find(p => p.kind === 'process');
@@ -77,7 +81,7 @@
   r = ok(PC.convertPreset(proc, H2D));
   j = r[0] && r[0].json;
   // H2D has Direct Drive Standard on both extruders; both get the edited value.
-  t('process X2D->H2D only DD Standard set', j && j.print_extruder_variant.every((v, i) => j.outer_wall_speed[i] === (v === 'Direct Drive Standard' ? '80' : 'nil')), j && j.outer_wall_speed);
+  t('process X2D->H2D only DD Standard set', j && j.print_extruder_variant.every((v, i) => E(j, 'process').outer_wall_speed[i] === (v === 'Direct Drive Standard' ? '80' : 'nil')), j && j.outer_wall_speed);
   const slowProc = fromProj(F.projectSlow).find(p => p.kind === 'process');
   r = ok(PC.convertPreset(slowProc, A1));
   t('slow process->A1 travel speed', r[0] && JSON.stringify(r[0].json.travel_speed) === '["400"]' && r[0].json.support_angle === '22.5', r[0] && r[0].json.travel_speed);
@@ -160,6 +164,11 @@
         if (!tb) { bad.push('missing base ' + x.json.inherits); continue; }
         const eff = x.json.compatible_printers || tb.c.filter(c => PC.parseCompat(c).printer === p);
         if (!eff.length || eff.some(c => { const q = PC.parseCompat(c); return q.printer !== p || !srcNoz.has(q.nozzle); })) bad.push(x.json.name);
+        // "nil" only where Bambu's own default is "nil" (anything else makes Bambu skip the file on import)
+        const ks = tb.k != null ? db.P.keysets[tb.k] : [];
+        for (const [k, v] of Object.entries(x.json)) if (Array.isArray(v)) v.forEach((e, i) => {
+          if (e === 'nil' && !(ks.includes(k) && tb.d[ks.indexOf(k)][i] === 'nil')) bad.push(`${x.json.name}: nil in ${k}`);
+        });
       }
     }
   }
